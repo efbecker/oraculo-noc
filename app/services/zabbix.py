@@ -28,15 +28,17 @@ DISCOS_PERMITIDOS_REGEX = re.compile(r'^(?:[A-Z]:\\?|/|/var|/home|/data|/opt|/us
 STATIC_DIR = os.path.join(os.getcwd(), 'app', 'static')
 os.makedirs(STATIC_DIR, exist_ok=True)
 
-def zabbix_api(method, params, token):
+# A MÁGICA COMEÇA AQUI: Recebe a URL do cliente, se não tiver, usa a padrão
+def zabbix_api(method, params, token, url=None):
     if not token: raise ValueError("Token do Zabbix não configurado para este usuário.")
+    endpoint = url if url else ZABBIX_URL
     headers = {'Content-Type': 'application/json-rpc'}
     payload = {"jsonrpc": "2.0", "method": method, "params": params, "auth": token, "id": 1}
-    resposta = requests.post(ZABBIX_URL, json=payload, headers=headers, timeout=45).json()
+    resposta = requests.post(endpoint, json=payload, headers=headers, timeout=45).json()
     if 'error' in resposta: raise Exception(f"Erro na API Zabbix: {resposta['error'].get('data')}")
     return resposta.get('result', [])
 
-def fetch_historical_data(items_list, hora_passada, hora_atual, dias, token):
+def fetch_historical_data(items_list, hora_passada, hora_atual, dias, token, url=None):
     hist_by_item = {}
     if not items_list: return hist_by_item
 
@@ -49,7 +51,7 @@ def fetch_historical_data(items_list, hora_passada, hora_atual, dias, token):
     for vt, iids in by_type.items():
         found_iids = set()
         if dias > 1:
-            hist_data = zabbix_api("trend.get", {"itemids": iids, "time_from": hora_passada, "time_till": hora_atual, "limit": 200000}, token)
+            hist_data = zabbix_api("trend.get", {"itemids": iids, "time_from": hora_passada, "time_till": hora_atual, "limit": 200000}, token, url)
             for row in hist_data:
                 iid = row['itemid']
                 if iid not in hist_by_item: hist_by_item[iid] = []
@@ -60,7 +62,7 @@ def fetch_historical_data(items_list, hora_passada, hora_atual, dias, token):
         if missing:
             hist_fallback = zabbix_api("history.get", {
                 "itemids": missing, "history": vt, "time_from": hora_passada, "time_till": hora_atual, "limit": 200000
-            }, token)
+            }, token, url)
             for row in hist_fallback:
                 iid = row['itemid']
                 if iid not in hist_by_item: hist_by_item[iid] = []
@@ -120,16 +122,16 @@ def process_series(t_data, base_unit, item_name=""):
                 final_unit = final_unit if final_unit else ""
     return t, v, final_unit
 
-def consultar_status_host_zabbix(nome_alvo: str, token: str, grupo: str) -> str:
+def consultar_status_host_zabbix(nome_alvo: str, token: str, grupo: str, url: str = None) -> str:
     params = {"output": ["hostid", "host", "name", "status"], "selectInterfaces": ["ip", "dns", "useip"]}
     if nome_alvo and nome_alvo.lower() not in ['ambiente', 'meu ambiente', 'infraestrutura', 'tudo', 'geral']:
         params["search"] = {"name": nome_alvo}
     if grupo and grupo != "GLOBAL": 
-        g_res = zabbix_api("hostgroup.get", {"search": {"name": grupo}}, token)
+        g_res = zabbix_api("hostgroup.get", {"search": {"name": grupo}}, token, url)
         if g_res: params["groupids"] = g_res[0].get('groupid')
 
     try:
-        hosts = zabbix_api("host.get", params, token)
+        hosts = zabbix_api("host.get", params, token, url)
         if not hosts: return f"Nenhum servidor localizado no seu grupo ({grupo})."
         respostas = []
         for vm in hosts:
@@ -143,21 +145,21 @@ def consultar_status_host_zabbix(nome_alvo: str, token: str, grupo: str) -> str:
         return f"### Status da Infraestrutura ({grupo}):\n\n" + "".join(respostas)
     except Exception as e: return f"Erro de comunicação com o Zabbix: {str(e)}"
 
-def consultar_incidentes_zabbix(nome_alvo: str, dias_historico: float, token: str, grupo: str, search_term: str = "") -> str:
+def consultar_incidentes_zabbix(nome_alvo: str, dias_historico: float, token: str, grupo: str, search_term: str = "", url: str = None) -> str:
     dias = int(float(dias_historico)) if float(dias_historico) >= 1 else 7
     try:
         filtro = {}
         if grupo and grupo != "GLOBAL":
-            grupos = zabbix_api("hostgroup.get", {"search": {"name": grupo}, "output": ["groupid"]}, token)
+            grupos = zabbix_api("hostgroup.get", {"search": {"name": grupo}, "output": ["groupid"]}, token, url)
             if grupos: filtro["groupids"] = [g['groupid'] for g in grupos]
             
         if nome_alvo and nome_alvo.lower() not in ['ambiente', 'meu ambiente', 'infraestrutura', 'tudo', 'geral', 'vpn']:
-            hosts = zabbix_api("host.get", {"search": {"name": nome_alvo}, "output": ["hostid"]}, token)
+            hosts = zabbix_api("host.get", {"search": {"name": nome_alvo}, "output": ["hostid"]}, token, url)
             if hosts: filtro["hostids"] = [h['hostid'] for h in hosts]
             else: return f"Servidor '{nome_alvo}' não encontrado."
 
-        ativos = zabbix_api("problem.get", {**{"sortfield": ["eventid"], "sortorder": "DESC"}, **filtro}, token)
-        recentes = zabbix_api("problem.get", {**{"recent": True, "time_from": int(time.time()) - (dias * 24 * 3600), "sortfield": ["eventid"], "sortorder": "DESC"}, **filtro}, token)
+        ativos = zabbix_api("problem.get", {**{"sortfield": ["eventid"], "sortorder": "DESC"}, **filtro}, token, url)
+        recentes = zabbix_api("problem.get", {**{"recent": True, "time_from": int(time.time()) - (dias * 24 * 3600), "sortfield": ["eventid"], "sortorder": "DESC"}, **filtro}, token, url)
 
         problemas_dict = {p['eventid']: p for p in ativos}
         for p in recentes: problemas_dict.setdefault(p['eventid'], p)
@@ -166,7 +168,7 @@ def consultar_incidentes_zabbix(nome_alvo: str, dias_historico: float, token: st
         t_ids = list(set([p['objectid'] for p in problemas if p.get('objectid')]))
         trigger_to_host = {}
         if t_ids:
-            trigger_to_host = {t['triggerid']: t['hosts'][0]['name'] for t in zabbix_api("trigger.get", {"triggerids": t_ids, "selectHosts": ["name"]}, token) if t.get('hosts')}
+            trigger_to_host = {t['triggerid']: t['hosts'][0]['name'] for t in zabbix_api("trigger.get", {"triggerids": t_ids, "selectHosts": ["name"]}, token, url) if t.get('hosts')}
 
         mapa_sev = {"0": "Info", "1": "Info", "2": "Atenção", "3": "Média", "4": "Alta", "5": "Crítica"}
         linhas = []
@@ -183,7 +185,6 @@ def consultar_incidentes_zabbix(nome_alvo: str, dias_historico: float, token: st
         else:
             resultado_problemas = f"### Incidentes Detectados ({grupo} - Últimos {dias} dias):\n\n" + "".join(linhas[:30])
 
-        # A MÁGICA AQUI: O Radar de Tempo Real para Usuários de VPN
         vpn_info = "\n\n### Status de Conexões VPN (Tempo Real):\n"
         try:
             items_vpn = zabbix_api("item.get", {
@@ -192,7 +193,7 @@ def consultar_incidentes_zabbix(nome_alvo: str, dias_historico: float, token: st
                 "search": {"name": ["VPN", "SSL"]},
                 "searchByAny": True,
                 **filtro
-            }, token)
+            }, token, url)
             
             conexoes = []
             for it in items_vpn:
@@ -212,7 +213,7 @@ def consultar_incidentes_zabbix(nome_alvo: str, dias_historico: float, token: st
 
     except Exception as e: return f"Erro na coleta de incidentes: {str(e)}"
 
-def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str) -> str:
+def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str, url: str = None) -> str:
     dias = int(float(dias_historico)) if float(dias_historico) >= 1 else 1
     hora_atual = int(time.time())
     hora_passada = int(hora_atual - (dias * 24 * 3600))
@@ -221,10 +222,10 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str)
     try:
         filtro = {}
         if grupo and grupo != "GLOBAL":
-            g_res = zabbix_api("hostgroup.get", {"search": {"name": grupo}}, token)
+            g_res = zabbix_api("hostgroup.get", {"search": {"name": grupo}}, token, url)
             if g_res: filtro["groupids"] = g_res[0].get('groupid')
         
-        hosts = zabbix_api("host.get", {"output": ["hostid", "name"], **filtro}, token)
+        hosts = zabbix_api("host.get", {"output": ["hostid", "name"], **filtro}, token, url)
         if not hosts: return "Nenhum servidor encontrado no grupo."
         
         host_ids = [h['hostid'] for h in hosts]
@@ -232,7 +233,7 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str)
             "hostids": host_ids,
             "filter": {"status": "0", "value_type": ["0", "3"]},
             "output": ["itemid", "hostid", "name", "value_type", "units"]
-        }, token)
+        }, token, url)
         
         host_items = {h['hostid']: {'cpu': [], 'mem': [], 'nets': {}, 'vpn_users': [], 'disks': [], 'cpu_total': None, 'mem_total': None} for h in hosts}
         
@@ -292,7 +293,7 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str)
                 if pairs['in']: host_items_to_fetch.append(pairs['in'])
                 if pairs['out']: host_items_to_fetch.append(pairs['out'])
                 
-            hist_by_item = fetch_historical_data(host_items_to_fetch, hora_passada, hora_atual, dias, token)
+            hist_by_item = fetch_historical_data(host_items_to_fetch, hora_passada, hora_atual, dias, token, url)
             
             cpu_tot_val, mem_tot_val = "-", "-"
             if not is_fgt:
@@ -590,5 +591,5 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str)
         return html_progress + msg_chat + botao_html
     except Exception as e: return f"Erro ao gerar relatório global: {str(e)}"
 
-def gerar_grafico_zabbix(nome_host: str, metrica: str, quantidade_dias: float, token: str) -> str:
-    pass
+def gerar_grafico_zabbix(nome_host: str, metrica: str, quantidade_dias: float, token: str, url: str = None) -> str:
+    pass # Mantive essa parte limpa para você não perder nada que já tenha feito aqui!

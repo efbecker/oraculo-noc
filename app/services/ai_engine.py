@@ -31,11 +31,20 @@ def get_user_profile(username):
             return str(row[0]).upper().strip() if (row and row[0]) else "CLIENTE"
     except: return "CLIENTE"
 
-def obter_contexto_zabbix_real_time(token, grupo):
-    """O Radar da IA: Lê o estado atual do ambiente antes de responder qualquer coisa."""
+def get_user_zabbix_url(username):
+    """Nova função: Busca a URL específica do Zabbix do Inquilino/Cliente"""
     try:
-        status = consultar_status_host_zabbix("", token, grupo)
-        incidentes = consultar_incidentes_zabbix("", 1.0, token, grupo)
+        with sqlite3.connect(DB_PATH, timeout=15) as conn:
+            c = conn.cursor()
+            c.execute("SELECT zabbix_url FROM users WHERE username=?", (username,))
+            row = c.fetchone()
+            return str(row[0]).strip() if (row and row[0]) else None
+    except: return None
+
+def obter_contexto_zabbix_real_time(token, grupo, url=None):
+    try:
+        status = consultar_status_host_zabbix("", token, grupo, url)
+        incidentes = consultar_incidentes_zabbix("", 1.0, token, grupo, "", url)
         return f"\n--- ESTADO ATUAL DA INFRAESTRUTURA ---\n{status}\n{incidentes}"
     except: return ""
 
@@ -46,7 +55,6 @@ def exec_chat_with_oracle(prompt, username="admin", context="", chat_history_row
         config={}, signer=signer, service_endpoint=OCI_ENDPOINT, retry_strategy=oci.retry.NoneRetryStrategy()
     )
     
-    # Injetamos o contexto de tempo real diretamente no preâmbulo da IA
     preamble = f"""Você é o Oráculo, um especialista de NOC Sênior. 
     SEMPRE consulte o contexto abaixo para responder. Se o usuário perguntar por algo que está no contexto, use os dados exatos.
     CONTEXTO ATUAL: {context}
@@ -68,12 +76,14 @@ def exec_chat_with_oracle(prompt, username="admin", context="", chat_history_row
     resp = client.chat(details)
     return resp.data.chat_response.text
 
-def process_oraculo_message(message, username, token_zabbix, grupo_cliente, tts_enabled=False, history_rows=None):
-    # 1. Pega o contexto real antes de decidir o que fazer
-    context = obter_contexto_zabbix_real_time(token_zabbix, grupo_cliente)
+def process_oraculo_message(message, username, token_zabbix, grupo_cliente, tts_enabled=False, history_rows=None, zabbix_url=None):
+    # Fallback genial: Se a rota do chat não mandou URL, o cérebro puxa do banco!
+    if not zabbix_url:
+        zabbix_url = get_user_zabbix_url(username)
+
+    context = obter_contexto_zabbix_real_time(token_zabbix, grupo_cliente, zabbix_url)
     msg_l = message.lower()
 
-    # 2. Rotinas automáticas de Relatórios
     if any(p in msg_l for p in ['grafico', 'gráfico', 'consumo', 'relatorio', 'relatório']):
         dias = 1.0
         dias_match = re.search(r'(\d+)\s*dias?', msg_l)
@@ -84,17 +94,16 @@ def process_oraculo_message(message, username, token_zabbix, grupo_cliente, tts_
         if target_match: target = target_match.group(1)
         
         if target == "TODOS":
-            reply = gerar_relatorio_consumo_todos(dias, token_zabbix, grupo_cliente)
+            reply = gerar_relatorio_consumo_todos(dias, token_zabbix, grupo_cliente, zabbix_url)
         else:
             metrica = "CPU"
             if any(x in msg_l for x in ['memoria', 'memória']): metrica = "MEMORIA"
             elif 'disco' in msg_l: metrica = "DISCO"
             elif 'rede' in msg_l: metrica = "REDE"
-            reply = gerar_grafico_zabbix(target, metrica, dias, token_zabbix)
+            reply = gerar_grafico_zabbix(target, metrica, dias, token_zabbix, zabbix_url)
         
         return {"reply": reply, "audio_path": create_tts_audio("Relatório concluído, efetue o download.") if tts_enabled else None, "is_html": 1}
 
-    # 3. Rotinas de Scan (com segurança)
     if any(p in msg_l for p in ['scan', 'nmap', 'secops', 'vulnerabilidade']):
         perfil = get_user_profile(username)
         if "ADMIN" not in perfil and "NOC" not in perfil and grupo_cliente != "GLOBAL":
@@ -104,6 +113,5 @@ def process_oraculo_message(message, username, token_zabbix, grupo_cliente, tts_
         scan_id = start_scan_thread(target, username, tts_enabled)
         return {"action": "scan", "target": target, "scan_id": scan_id}
 
-    # 4. Chat Inteligente com Contexto Zabbix
     reply = exec_chat_with_oracle(message, username=username, context=context, chat_history_rows=history_rows)
     return {"reply": reply, "audio_path": create_tts_audio(reply) if tts_enabled else None}
