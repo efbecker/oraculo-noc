@@ -2,7 +2,7 @@ import sqlite3
 from flask import Blueprint, request, redirect, url_for, session, render_template_string
 from config import DB_PATH
 
-admin_bp = Blueprint('admin', __name__)
+bp = Blueprint('admin', __name__)
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -96,21 +96,20 @@ HTML_TEMPLATE = """
 </html>
 """
 
-@admin_bp.route('/admin', methods=['GET'])
+@bp.route('/admin', methods=['GET'])
 def index():
     if session.get('profile') not in ['ADMIN', 'ADMINISTRADOR']:
         return "Acesso Negado.", 403
     
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    # Puxa o campo zabbix_url (índice 6)
     c.execute("SELECT id, username, password, profile, grupo_cliente, token_zabbix, zabbix_url FROM users")
     users = c.fetchall()
     conn.close()
     
     return render_template_string(HTML_TEMPLATE, users=users)
 
-@admin_bp.route('/admin/save', methods=['POST'])
+@bp.route('/admin/save', methods=['POST'])
 def save_user():
     if session.get('profile') not in ['ADMIN', 'ADMINISTRADOR']:
         return "Acesso Negado.", 403
@@ -149,7 +148,7 @@ def save_user():
     conn.close()
     return redirect(url_for('admin.index'))
 
-@admin_bp.route('/admin/delete', methods=['POST'])
+@bp.route('/admin/delete', methods=['POST'])
 def delete_user():
     if session.get('profile') not in ['ADMIN', 'ADMINISTRADOR']:
         return "Acesso Negado.", 403

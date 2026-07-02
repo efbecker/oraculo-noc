@@ -28,24 +28,24 @@ def login():
         try:
             with sqlite3.connect(DB_PATH, timeout=15) as conn:
                 c = conn.cursor()
-                c.execute("SELECT id, password, role, zabbix_token, client_group, ai_provider, ai_api_key, ai_model FROM users WHERE username=?", (username,))
+                # 1. CORREÇÃO: Buscando as colunas REAIS do banco novo Multi-Tenant
+                c.execute("SELECT id, password, profile, token_zabbix, grupo_cliente, zabbix_url, ai_model FROM users WHERE username=?", (username,))
                 user = c.fetchone()
                 
-                if user and check_password_hash(user[1], password):
+                # 2. CORREÇÃO: Aceita a senha em texto puro (script) ou em Hash (segurança)
+                if user and (user[1] == password or (user[1].startswith('pbkdf2:') and check_password_hash(user[1], password))):
                     session['user_id'] = user[0]
                     session['username'] = username
-                    session['role'] = user[2]
-                    session['zabbix_token'] = user[3]
-                    session['client_group'] = user[4]
-                    session['ai_provider'] = user[5]
-                    session['ai_api_key'] = user[6]
-                    session['ai_model'] = user[7]
+                    session['profile'] = user[2]
+                    session['token_zabbix'] = user[3]
+                    session['grupo_cliente'] = user[4]
+                    session['zabbix_url'] = user[5]
+                    session['ai_model'] = user[6]
                     return jsonify({"status": "ok"})
             return jsonify({"error": "Credenciais inválidas"}), 401
         except Exception as e:
             return jsonify({"error": str(e)}), 500
             
-    # O Flask agora busca automaticamente na pasta 'app/templates'
     return render_template('login.html')
 
 @bp.route("/logout")

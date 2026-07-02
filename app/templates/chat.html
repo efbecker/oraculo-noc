@@ -1,791 +1,100 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="pt-br">
 <head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"><title>Oráculo | Armazém Cloud</title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-<!-- Marked.js para formatar o Markdown da IA perfeitamente -->
-<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-<style>
-:root{ --bg:#0b0e14;--card:#151b23;--text:#e6edf3;--muted:#8b949e; --accent:#1f6feb;--danger:#f85149;--warn:#d29922;--border:#30363d; --ai:#00e5ff; }
-*{box-sizing:border-box}
-
-body{ margin:0; font-family:Segoe UI,sans-serif; background:var(--bg); color:var(--text); display:flex; flex-direction:column; height:100vh; overflow:hidden;}
-
-/* TOP NAVBAR */
-.top-nav { background: #010409; border-bottom: 1px solid var(--border); padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; font-size: 0.85rem; z-index: 9999; position: relative;}
-.nav-left { display: flex; align-items: center; }
-.mobile-menu-btn { display: none; background: transparent; border: none; color: #fff; font-size: 1.5rem; cursor: pointer; padding: 10px; margin-left: -10px; margin-right: 10px;}
-.top-nav h1 { font-family:Courier New,monospace; color:#fff; margin:0; font-size: 1.3rem; white-space: nowrap; font-weight: 800; letter-spacing: 1px;}
-.ai-badge { background:linear-gradient(45deg,#005c97,#00e5ff);padding:2px 6px;font-size:.7em;border-radius:4px;vertical-align: middle; color:#000; font-weight: bold; margin-left: 5px;}
-
-.user-info { display: flex; align-items: center; gap: 15px;}
-.user-info a { text-decoration: none; font-weight: bold; color:var(--muted); cursor:pointer; font-size:1.1rem; padding: 10px; transition: 0.2s;}
-.user-info a:hover { filter: brightness(1.2); color:#fff; }
-.user-info .link-admin { color: var(--warn); }
-.user-info .link-logout { color: var(--danger); }
-.client-group-badge { background: rgba(255,255,255,0.1); padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; color: #8b949e; border: 1px solid var(--border);}
-
-/* MAIN LAYOUT */
-.app-body { display: flex; flex: 1; overflow: hidden; position: relative; z-index: 1;}
-
-/* SIDEBAR */
-.sidebar { width: 260px; background: #0d1117; border-right: 1px solid var(--border); display: flex; flex-direction: column; transition: transform 0.3s ease; z-index: 50;}
-.sidebar-header { padding: 15px; border-bottom: 1px solid var(--border); font-size: 0.9rem; color: var(--muted); font-weight: bold; display: flex; justify-content: space-between; align-items: center;}
-.new-chat-btn { background: transparent; border: none; color: var(--text); cursor: pointer; font-size: 1rem; padding: 10px; margin: -10px;}
-.new-chat-btn:hover { color: var(--ai); }
-.sidebar-list { list-style: none; padding: 10px; margin: 0; overflow-y: auto; flex: 1; }
-.sidebar-list li { padding: 10px 15px; border-radius: 6px; cursor: pointer; color: var(--text); font-size: 0.9rem; margin-bottom: 5px; display:flex; align-items:center; transition: background 0.2s; position: relative;}
-.sidebar-list li:hover { background: rgba(255,255,255,0.05); }
-.sidebar-list li.active { background: rgba(0, 229, 255, 0.1); color: var(--ai); font-weight: bold; border-left: 3px solid var(--ai); }
-.sidebar-overlay { display: none; position: absolute; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:40; }
-
-.del-chat-btn { background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 0.85rem; padding: 10px; margin: -10px; opacity: 0; transition: opacity 0.2s, color 0.2s; position: absolute; right: 10px;}
-.sidebar-list li:hover .del-chat-btn { opacity: 1; }
-.del-chat-btn:hover { color: var(--danger); }
-
-/* CHAT MAIN AREA */
-.chat-main { flex: 1; display: flex; flex-direction: column; background: var(--bg); position: relative; }
-.chat-scroll { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; align-items: center; scroll-behavior: smooth; }
-.chat-wrapper { width: 100%; max-width: 800px; display: flex; flex-direction: column; gap: 25px; padding-bottom: 20px;}
-
-.message { width: 100%; display: flex; flex-direction: column; animation: fadeIn 0.3s ease; }
-.msg-user { align-items: flex-end; }
-.msg-ai { align-items: flex-start; }
-
-.bubble { padding: 12px 18px; border-radius: 18px; font-size: 0.95rem; line-height: 1.6; word-wrap: break-word; max-width: 90%; }
-.msg-user .bubble { background: var(--border); color: #fff; border-bottom-right-radius: 4px; }
-.msg-ai .bubble { background: transparent; border: none; padding: 0; padding-left: 15px; border-radius: 0; border-left: 3px solid var(--ai); max-width: 100%; color: #c9d1d9;}
-
-/* SCAN WIDGET (SECOPS) */
-.scan-widget { background: #161b22; border: 1px solid var(--border); border-radius: 8px; padding: 18px; margin-top: 10px; width: 100%; max-width: 450px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);}
-.scan-header { display: flex; justify-content: space-between; align-items: center; font-size: 0.85rem; margin-bottom: 15px; flex-wrap: wrap; gap: 12px;}
-.scan-target { font-weight: bold; color: var(--text); word-break: break-word; max-width: 100%; }
-.scan-stage { display: flex; align-items: center; gap: 10px; justify-content: flex-end; flex-grow: 1; }
-.progress-container { width:100%; background-color:rgba(255,255,255,0.05); border-radius:6px; height:8px; overflow:hidden; position:relative; }
-.progress-bar { height:100%; width:0%; background:linear-gradient(90deg, #1f6feb, #00e5ff); transition:width 0.4s ease; }
-
-/* INPUT AREA */
-.input-container { background: var(--bg); padding: 15px 20px 25px 20px; display: flex; justify-content: center; }
-.input-box { width: 100%; max-width: 800px; display: flex; gap: 10px; align-items: center; background: var(--card); border: 1px solid var(--border); border-radius: 24px; padding: 6px 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.2);}
-.input-box:focus-within { border-color: var(--accent); }
-
-/* CONTROLES DO CHAT */
-.audio-control-btn { background: transparent; border: none; color: var(--muted); border-radius: 50%; width: 40px; height: 40px; cursor: pointer; display: flex; justify-content: center; align-items: center; font-size: 1.1rem; transition: 0.2s; }
-.audio-control-btn:hover { color: #fff; }
-.audio-control-btn.active-speaker { color: var(--ai); }
-
-.agent-mode-btn { background: linear-gradient(45deg, #005c97, #00e5ff); border: none; color: #fff; border-radius: 50%; width: 40px; height: 40px; cursor: pointer; display: flex; justify-content: center; align-items: center; font-size: 1.1rem; transition: 0.2s; box-shadow: 0 0 10px rgba(0,229,255,0.4); color: #000;}
-.agent-mode-btn:hover { filter: brightness(1.2); transform: scale(1.05); }
-
-.chat-input { flex: 1; background: transparent; border: none; color: var(--text); padding: 12px 5px; outline: none; font-size: 1rem; }
-.send-btn { background: var(--accent); border: none; color: #fff; border-radius: 50%; width: 38px; height: 38px; cursor: pointer; display: flex; justify-content: center; align-items: center; font-size: 1rem; transition: 0.2s; }
-.send-btn:hover { filter: brightness(1.1); }
-.send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-/* ================= MODAL DO MODO ORÁCULO DE VOZ ================= */
-.agent-overlay { display: none; position: fixed; z-index: 100000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(11, 14, 20, 0.95); flex-direction: column; align-items: center; justify-content: center; animation: fadeIn 0.3s ease; backdrop-filter: blur(5px);}
-.close-agent-btn { position: absolute; top: 20px; right: 20px; background: transparent; border: none; color: #fff; font-size: 2rem; cursor: pointer; padding: 15px;}
-.close-agent-btn:hover { color: var(--danger); }
-
-.orb-container { position: relative; width: 200px; height: 200px; display: flex; justify-content: center; align-items: center; margin-bottom: 40px;}
-.glowing-orb { width: 100px; height: 100px; border-radius: 50%; background: linear-gradient(45deg, #005c97, #00e5ff); transition: all 0.3s ease;}
-
-/* Animações do Oráculo (Tons de Ciano e Azul Gelo) */
-.orb-listening { box-shadow: 0 0 40px #00e5ff, inset 0 0 20px #fff; animation: breathe 1.5s infinite alternate; width: 120px; height: 120px;}
-.orb-processing { background: linear-gradient(45deg, #1f6feb, #00e5ff); box-shadow: 0 0 50px #1f6feb; animation: spin 1s linear infinite; width: 100px; height: 100px;}
-.orb-speaking { background: linear-gradient(45deg, #a371f7, #00e5ff); box-shadow: 0 0 60px #00e5ff; animation: pulseSpeak 0.5s infinite alternate; width: 130px; height: 130px;}
-
-.agent-status-text { font-size: 1.5rem; color: #fff; font-family: Courier New, monospace; margin-bottom: 20px; text-align: center; font-weight: bold;}
-.agent-transcript { color: var(--muted); font-size: 1.1rem; max-width: 80%; text-align: center; min-height: 30px;}
-
-@keyframes breathe { 0% { transform: scale(1); opacity: 0.8;} 100% { transform: scale(1.15); opacity: 1; box-shadow: 0 0 60px #00e5ff;} }
-@keyframes spin { 100% { transform: rotate(360deg); } }
-@keyframes pulseSpeak { 0% { transform: scale(1); box-shadow: 0 0 30px #1f6feb;} 100% { transform: scale(1.2); box-shadow: 0 0 80px #00e5ff;} }
-
-/* ================= MODAL DE ADMINISTRAÇÃO (NOC) ================= */
-.modal { display: none; position: fixed; z-index: 10000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.8); align-items: center; justify-content: center; animation: fadeIn 0.2s ease;}
-.modal-content { background: var(--card); border: 1px solid var(--border); padding: 25px; border-radius: 8px; width: 95%; max-width: 900px; max-height: 85vh; overflow-y: auto; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-.modal-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 15px; margin-bottom: 20px;}
-.modal-header h2 { margin: 0; color: var(--warn); font-size: 1.4rem;}
-.close-btn { color: var(--muted); font-size: 1.5rem; cursor: pointer; border: none; background: transparent; }
-.close-btn:hover { color: #fff; }
-
-.history-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 0.85rem; margin-top: 15px;}
-.history-table th, .history-table td { padding: 10px; border-bottom: 1px solid var(--border); }
-.history-table th { color: var(--muted); background: #1c2128; }
-.btn-small { background: var(--border); padding: 5px 10px; border-radius: 4px; color: #fff; cursor: pointer; border: none; font-size: 0.75rem;}
-.btn-small:hover { filter: brightness(1.3); }
-.btn-delete { background: var(--danger); }
-.btn-warn { background: var(--warn); color: #000; }
-.btn-export { background: #2ea043; color: #fff; border:none; padding: 6px 12px; border-radius: 4px; font-weight: bold; cursor: pointer; font-size: 0.8rem; float: right;}
-.btn-export:hover { background: #3fb950; }
-
-.form-group-inline { display:flex; gap:10px; flex-wrap:wrap; background:#0d1117; padding:15px; border-radius:6px; border:1px solid var(--border); align-items: center; margin-bottom: 10px;}
-.form-group-inline input, .form-group-inline select { flex:1; background:rgba(255,255,255,0.05); border:1px solid var(--border); color:var(--text); padding: 10px; border-radius: 6px; outline:none; min-width: 150px;}
-.form-group-inline button { background:var(--accent); border:none; color:#fff; font-weight:bold; padding:10px 15px; border-radius:6px; cursor:pointer;}
-
-@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-
-/* MARKDOWN FORMATTING NA IA */
-.ai-markdown a { color: #58a6ff; text-decoration: none; font-weight: bold; }
-.ai-markdown a:hover { text-decoration: underline; }
-.ai-markdown h3 { margin-top: 15px; margin-bottom: 8px; color: var(--ai); font-size: 1.05rem;}
-.ai-markdown ul { margin: 8px 0; padding-left: 20px; }
-.ai-markdown li { margin-bottom: 6px; }
-.ai-markdown b, .ai-markdown strong { color: #fff; }
-.ai-markdown img { max-width: 100%; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.3); border: 1px solid var(--border); margin-top: 10px;}
-.ai-markdown code { font-family: monospace; color: #ff7b72; background: rgba(255,255,255,0.1); padding: 2px 4px; border-radius: 3px; }
-.ai-markdown pre { background: #0d1117; padding: 10px; border-radius: 4px; overflow-x: auto; border: 1px solid var(--border); }
-
-/* RESPONSIVO PARA MOBILE */
-@media (max-width: 768px) {
-    .mobile-menu-btn { display: block; }
-    .sidebar { position: absolute; height: 100%; transform: translateX(-100%); box-shadow: 5px 0 15px rgba(0,0,0,0.5); }
-    .sidebar.open { transform: translateX(0); }
-    .sidebar-overlay.open { display: block; }
-    .user-info .nav-text { display: none; }
-    .user-info { gap: 5px; } 
-    .top-nav h1 { font-size: 1.1rem; }
-}
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Oráculo - Painel NOC & SecOps</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #121212; color: #e0e0e0; margin: 0; display: flex; height: 100vh; }
+        .chat-container { flex: 1; display: flex; flex-direction: column; background-color: #161616; }
+        .chat-header { background-color: #1e1e1e; padding: 15px 25px; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center; }
+        .chat-title { font-size: 18px; font-weight: bold; color: #00e5ff; display: flex; align-items: center; gap: 10px; }
+        .user-info { display: flex; align-items: center; gap: 15px; font-size: 14px; color: #aaa; }
+        
+        /* Estilização dos Botões Superiores */
+        .btn-header { padding: 6px 12px; border-radius: 4px; font-weight: bold; text-decoration: none; font-size: 13px; transition: 0.3s; display: inline-flex; align-items: center; gap: 5px; }
+        .btn-admin { background-color: #242424; color: #00e5ff; border: 1px solid #00e5ff; }
+        .btn-admin:hover { background-color: #00e5ff; color: #121212; }
+        .btn-logout { background-color: #ff4d4d; color: white; border: none; }
+        .btn-logout:hover { background-color: #ff1a1a; }
+        
+        .chat-messages { flex: 1; padding: 25px; overflow-y: auto; display: flex; flex-direction: column; gap: 15px; }
+        .message { max-width: 80%; padding: 12px 18px; border-radius: 8px; line-height: 1.5; font-size: 14px; word-wrap: break-word; }
+        .message.user { background-color: #0077ff; color: white; align-self: flex-end; border-bottom-right-radius: 2px; }
+        .message.bot { background-color: #242424; color: #e0e0e0; align-self: flex-start; border-bottom-left-radius: 2px; border: 1px solid #333; }
+        .chat-input-container { padding: 20px; background-color: #1e1e1e; border-top: 1px solid #333; display: flex; gap: 12px; }
+        .chat-input { flex: 1; background-color: #121212; color: white; border: 1px solid #444; padding: 12px 15px; border-radius: 6px; font-size: 14px; outline: none; }
+        .chat-input:focus { border-color: #00e5ff; }
+        .btn-send { background-color: #00e5ff; color: #121212; border: none; padding: 0 20px; border-radius: 6px; font-weight: bold; cursor: pointer; transition: 0.3s; }
+        .btn-send:hover { background-color: #00b4d8; }
+    </style>
 </head>
 <body>
-
-<div class="top-nav">
-    <div class="nav-left">
-        <button class="mobile-menu-btn" onclick="toggleSidebar()"><i class="fas fa-bars"></i></button>
-        <h1>Oráculo <span class="ai-badge">NOC/SOC</span></h1>
-    </div>
-    <div class="user-info">
-        <span class="client-group-badge" title="Grupo Zabbix do Cliente"><i class="fas fa-building"></i> {{ client_group }}</span>
-        <span class="nav-text"><i class="fas fa-user-shield"></i> {{ username.upper() }}</span>
-        
-        {% if role == 'admin' %}
-        <a onclick="openAdminModal()" class="link-admin" title="Painel NOC Administrativo"><i class="fas fa-users-cog"></i> <span class="nav-text">Gestão</span></a>
-        {% endif %}
-        
-        <a href="/logout" class="link-logout" title="Sair do Sistema"><i class="fas fa-power-off"></i></a>
-    </div>
-</div>
-
-<div class="app-body">
-    <div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
-    <aside class="sidebar" id="sidebar">
-        <div class="sidebar-header">
-            <span><i class="fas fa-history"></i> Histórico</span>
-            <button class="new-chat-btn" onclick="startNewChat()" title="Nova Auditoria"><i class="fas fa-edit"></i></button>
-        </div>
-        <ul class="sidebar-list" id="sidebarList">
-            <!-- Datas carregadas dinamicamente via JS -->
-        </ul>
-    </aside>
-
-    <main class="chat-main">
-        <div class="chat-scroll" id="chatScroll">
-            <div class="chat-wrapper" id="chatWrapper">
-                <!-- As mensagens entram aqui -->
+    <div class="chat-container">
+        <div class="chat-header">
+            <div class="chat-title">🤖 Oráculo NOC & SecOps <span style="font-size:11px; background:#242424; color:#888; padding:2px 6px; border-radius:4px; border:1px solid #333;">{{ grupo_cliente }}</span></div>
+            <div class="user-info">
+                <span>Olá, <strong>{{ username }}</strong> ({{ profile }})</span>
+                
+                {% if profile == 'ADMINISTRADOR' %}
+                <a href="/admin" class="btn-header btn-admin">⚙️ Painel Admin</a>
+                {% endif %}
+                
+                <a href="/logout" class="btn-header btn-logout">Sair</a>
             </div>
         </div>
 
-        <div class="input-container">
-            <div class="input-box">
-                <button class="audio-control-btn" id="speakerBtn" title="Ativar Resposta por Voz (Edge TTS)"><i class="fas fa-volume-mute"></i></button>
-                <button class="agent-mode-btn" id="agentBtn" title="Ativar Modo Oráculo de Voz"><i class="fas fa-microphone-alt"></i></button>
-                <input type="text" class="chat-input" id="chatInput" placeholder="Pergunte ao Oráculo sobre infraestrutura ou secops..." autocomplete="off">
-                <button class="send-btn" id="sendBtn"><i class="fas fa-arrow-up"></i></button>
-            </div>
-        </div>
-    </main>
-</div>
+        <div class="chat-messages" id="chatMessages"></div>
 
-<!-- ================= MODAL DO MODO ORÁCULO DE VOZ ================= -->
-<div class="agent-overlay" id="agentOverlay">
-    <button class="close-agent-btn" onclick="stopAgentMode()"><i class="fas fa-times"></i></button>
-    <div class="orb-container">
-        <div class="glowing-orb" id="voiceOrb"></div>
+        <div class="chat-input-container">
+            <input type="text" class="chat-input" id="chatInput" placeholder="Pergunte ao Oráculo (ex: Como está a infra? Gerar relatório FinOps de 7 dias...)" onkeypress="if(event.key==='Enter') sendMessage()">
+            <button class="btn-send" onclick="sendMessage()">Enviar</button>
+        </div>
     </div>
-    <div class="agent-status-text" id="agentStatusText">Iniciando conexão...</div>
-    <div class="agent-transcript" id="agentTranscript"></div>
-</div>
 
-<!-- AUDIO PLAYER (Invisível) -->
-<audio id="ttsPlayer" style="display:none;"></audio>
+    <script>
+        const chatMessages = document.getElementById('chatMessages');
+        const chatInput = document.getElementById('chatInput');
 
-<!-- ================= MODAL DE ADMINISTRAÇÃO (NOC) ================= -->
-{% if role == 'admin' %}
-<div id="adminModal" class="modal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <h2><i class="fas fa-users-cog"></i> Painel NOC - Gestão Global</h2>
-            <button class="close-btn" onclick="closeAdminModal()"><i class="fas fa-times"></i></button>
-        </div>
-
-        <!-- Seção 1: Controle de Usuários (SecOps + Zabbix) -->
-        <h3 style="color: var(--ai); font-size: 1rem; margin-top:0;"><i class="fas fa-user-plus"></i> Novo Cliente / Operador</h3>
-        <div class="form-group-inline">
-            <input type="text" id="nUser" placeholder="Usuário (Login)">
-            <input type="password" id="nPass" placeholder="Senha">
-            <select id="nRole" style="max-width: 150px;">
-                <option value="user">Cliente (Leitura)</option>
-                <option value="admin">Administrador</option>
-            </select>
-        </div>
-        <div class="form-group-inline">
-            <input type="text" id="nToken" placeholder="Zabbix API Token (Opcional)">
-            <input type="text" id="nGroup" placeholder="Grupo no Zabbix (ex: GLOBAL ou VDC_CLIENTE)">
-        </div>
-        <div class="form-group-inline">
-            <select id="nAiProvider" style="max-width: 150px;">
-                <option value="oci">Oracle OCI</option>
-                <option value="gemini">Google Gemini</option>
-            </select>
-            <input type="text" id="nAiModel" placeholder="Modelo (ex: cohere.command-r-16k)">
-            <input type="password" id="nAiKey" placeholder="API Key Externa (Em branco p/ OCI Nativa)">
-            <button id="saveAdminBtn" onclick="saveUser()"><i class="fas fa-save"></i> Salvar Registro</button>
-            <button id="cancelEditBtn" style="display:none; background:#8b949e;" onclick="cancelEdit()">Cancelar</button>
-        </div>
-
-        <hr style="border-color: var(--border); margin: 25px 0;">
-
-        <!-- Seção 2: Tabela e Backup -->
-        <h3 style="color: var(--accent); font-size: 1rem; margin-top:0;">
-            <i class="fas fa-users"></i> Contas Ativas
-            <button class="btn-export" onclick="window.location.href='/api/admin/backup'"><i class="fas fa-database"></i> Exportar Banco de Dados</button>
-        </h3>
-        <table class="history-table">
-            <thead>
-                <tr><th>ID</th><th>Usuário</th><th>Perfil</th><th>Grupo Zabbix</th><th>Motor IA</th><th style="text-align:right">Ações</th></tr>
-            </thead>
-            <tbody id="userList"></tbody>
-        </table>
-    </div>
-</div>
-{% endif %}
-
-<script>
-// ================= DECLARAÇÕES GERAIS =================
-const CURRENT_USER = "{{ username }}";
-const chatScroll = document.getElementById("chatScroll");
-const chatWrapper = document.getElementById("chatWrapper");
-const chatInput = document.getElementById("chatInput");
-const sendBtn = document.getElementById("sendBtn");
-const agentBtn = document.getElementById("agentBtn");
-const speakerBtn = document.getElementById("speakerBtn");
-const ttsPlayer = document.getElementById("ttsPlayer");
-
-let activeScans = {}; 
-let pollingInterval = null;
-let allMessages = [];
-let currentSelectedDate = "";
-
-// ================= CONTROLE DE ÁUDIO TTS (PADRÃO) =================
-let isVoiceOutputEnabled = false;
-
-speakerBtn.addEventListener("click", () => {
-    isVoiceOutputEnabled = !isVoiceOutputEnabled;
-    if (isVoiceOutputEnabled) {
-        speakerBtn.innerHTML = '<i class="fas fa-volume-up"></i>';
-        speakerBtn.classList.add("active-speaker");
-        playVoiceResponse(null, "Oráculo ativado. Saída de voz neural habilitada.");
-    } else {
-        speakerBtn.innerHTML = '<i class="fas fa-volume-mute"></i>';
-        speakerBtn.classList.remove("active-speaker");
-        ttsPlayer.pause();
-        ttsPlayer.src = "";
-    }
-});
-
-// ================= MODO ORÁCULO DE VOZ CONTÍNUA =================
-let isAgentModeActive = false;
-let isAudioPlaying = false;
-const agentOverlay = document.getElementById("agentOverlay");
-const voiceOrb = document.getElementById("voiceOrb");
-const agentStatusText = document.getElementById("agentStatusText");
-const agentTranscript = document.getElementById("agentTranscript");
-
-const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-let recognition = null;
-
-if (SpeechRecognition) {
-    recognition = new SpeechRecognition();
-    recognition.lang = 'pt-BR';
-    recognition.continuous = false;
-    
-    recognition.onstart = () => {
-        if(isAgentModeActive && !isAudioPlaying) {
-            setAgentUIState("listening", "Estou ouvindo...");
-            agentTranscript.innerText = "";
+        async function loadHistory() {
+            try {
+                const response = await fetch('/api/chat/history');
+                const messages = await response.json();
+                chatMessages.innerHTML = '';
+                messages.forEach(msg => appendMessage(msg.sender === 'user' ? 'user' : 'bot', msg.content, msg.is_html));
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            } catch (e) { console.error("Erro ao carregar histórico", e); }
         }
-    };
-    
-    recognition.onresult = (event) => {
-        const transcript = event.results[0][0].transcript;
-        if(isAgentModeActive) {
-            agentTranscript.innerText = `"${transcript}"`;
-            setAgentUIState("processing", "Processando telemetria...");
-            sendAgentCommand(transcript);
+
+        function appendMessage(sender, content, isHtml = false) {
+            const msgDiv = document.createElement('div');
+            msgDiv.classList.add('message', sender);
+            if (isHtml) { msgDiv.innerHTML = content; } 
+            else { msgDiv.textContent = content; }
+            chatMessages.appendChild(msgDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
         }
-    };
-    
-    recognition.onend = () => {
-        if(isAgentModeActive && !isAudioPlaying) {
-            try { recognition.start(); } catch(e) {}
-        }
-    };
 
-    agentBtn.addEventListener("click", () => {
-        isAgentModeActive = true;
-        agentOverlay.style.display = "flex";
-        playVoiceResponse(null, "Oráculo do Armazém Cloud ativo. O que deseja auditar hoje?");
-    });
+        async function sendMessage() {
+            const message = chatInput.value.trim();
+            if (!message) return;
+            chatInput.value = '';
+            appendMessage('user', message);
 
-} else {
-    agentBtn.style.filter = "grayscale(100%)";
-    agentBtn.style.opacity = "0.5";
-    agentBtn.style.cursor = "not-allowed";
-    agentBtn.title = "Microfone Bloqueado: Requer HTTPS ou Suporte do Navegador";
-    agentBtn.addEventListener("click", () => {
-        if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost') {
-            alert("🔒 Bloqueio de Segurança!\n\nO navegador exige uma conexão HTTPS para abrir o Oráculo de Voz.");
-        } else {
-            alert("🦊 Navegador Incompatível!\n\nSeu navegador (como o Firefox) não possui suporte nativo para a API de Reconhecimento de Voz Web. Use o Chrome, Edge ou Safari.");
-        }
-    });
-}
-
-function stopAgentMode() {
-    isAgentModeActive = false;
-    isAudioPlaying = false;
-    agentOverlay.style.display = "none";
-    ttsPlayer.pause();
-    if (recognition) { try { recognition.stop(); } catch(e) {} }
-}
-
-function setAgentUIState(state, text) {
-    agentStatusText.innerText = text;
-    if(state === "listening") voiceOrb.className = "glowing-orb orb-listening";
-    else if(state === "processing") voiceOrb.className = "glowing-orb orb-processing";
-    else if(state === "speaking") voiceOrb.className = "glowing-orb orb-speaking";
-}
-
-async function sendAgentCommand(text) {
-    appendMessage("user", text, false, true); 
-    try {
-        const res = await fetch("/api/chat", {
-            method: "POST", headers: {"Content-Type":"application/json"},
-            body: JSON.stringify({ message: text, tts_enabled: true })
-        });
-        const data = await res.json();
-        
-        if (data.action === "scan") {
-            // Se for um teste do SecOps
-            appendMessage("ai", `Iniciando rastreio profundo em **${data.target}**. Acompanhe o progresso do radar:`, false, true);
-            playVoiceResponse(data.audio_path, `Iniciando varredura de vulnerabilidades no alvo ${data.target}`);
-            activeScans[data.scan_id] = { target: data.target, stage: "Inicializando...", progress: 0 };
-            createScanWidget(data.scan_id, data.target, "Inicializando...", 0);
-            startPolling();
-        } else {
-            // Se for uma resposta do Oráculo (Zabbix/Telemetria/Normal)
-            appendMessage("ai", data.reply || "Desculpe, falha na interpretação.", false, true);
-            playVoiceResponse(data.audio_path, data.reply);
-        }
-    } catch (e) {
-        appendMessage("ai", "Erro crítico de comunicação com a API.", true, true);
-        playVoiceResponse(null, "Erro crítico de comunicação com a API do servidor.");
-    }
-}
-
-ttsPlayer.onended = () => {
-    isAudioPlaying = false;
-    if(isAgentModeActive && recognition) {
-        setAgentUIState("listening", "Estou ouvindo...");
-        try { recognition.start(); } catch(e) {}
-    }
-};
-
-async function playVoiceResponse(audioPath, fallbackText) {
-    if (!isVoiceOutputEnabled && !isAgentModeActive) return;
-    ttsPlayer.pause();
-    isAudioPlaying = true;
-    if(isAgentModeActive) setAgentUIState("speaking", "Falando...");
-    if(recognition) { try { recognition.stop(); } catch(e) {} } 
-    
-    if (audioPath) {
-        ttsPlayer.src = `/api/audio/${audioPath}`;
-        ttsPlayer.play().catch(e => { 
-            isAudioPlaying = false; 
-            if(isAgentModeActive) setAgentUIState("listening", "Estou ouvindo..."); 
-        });
-    } else if (fallbackText) {
-        try {
-            const res = await fetch("/api/tts", {
-                method: "POST", headers: {"Content-Type":"application/json"},
-                body: JSON.stringify({ text: fallbackText })
-            });
-            const data = await res.json();
-            if(data.audio_path) {
-                ttsPlayer.src = `/api/audio/${data.audio_path}`;
-                ttsPlayer.play();
-            } else {
-                isAudioPlaying = false; if(isAgentModeActive) setAgentUIState("listening", "Estou ouvindo...");
+            try {
+                const response = await fetch('/api/chat/message', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message })
+                });
+                const data = await response.json();
+                appendMessage('bot', data.reply, data.is_html);
+            } catch (e) {
+                appendMessage('bot', '❌ Erro de comunicação com o servidor.');
             }
-        } catch(e) { isAudioPlaying = false; if(isAgentModeActive) setAgentUIState("listening", "Estou ouvindo..."); }
-    } else {
-        isAudioPlaying = false; if(isAgentModeActive) setAgentUIState("listening", "Estou ouvindo...");
-    }
-}
-
-
-// ================= CHAT TEXTUAL NORMAL =================
-async function sendMessage() {
-    const text = chatInput.value.trim();
-    if (!text) return;
-    
-    appendMessage("user", text, false, true);
-    chatInput.value = "";
-    sendBtn.disabled = true;
-    
-    const typingId = 'typing-' + Date.now();
-    appendMessage("ai", `<div id="${typingId}"><i class='fas fa-circle-notch fa-spin'></i> Compilando dados da infraestrutura...</div>`, true, false);
-
-    try {
-        const res = await fetch("/api/chat", {
-            method: "POST", headers: {"Content-Type":"application/json"},
-            body: JSON.stringify({ message: text, tts_enabled: isVoiceOutputEnabled })
-        });
-        const data = await res.json();
-        
-        document.getElementById(typingId).parentNode.remove();
-        
-        if (data.action === "scan") {
-            appendMessage("ai", `Iniciando rastreio profundo em **${data.target}**. Acompanhe o progresso do radar:`, false, true);
-            if (isVoiceOutputEnabled) playVoiceResponse(data.audio_path, `Iniciando varredura no alvo ${data.target}`);
-            activeScans[data.scan_id] = { target: data.target, stage: "Inicializando...", progress: 0 };
-            createScanWidget(data.scan_id, data.target, "Inicializando...", 0);
-            startPolling();
-        } else {
-            appendMessage("ai", data.reply || "Erro interno da IA.", false, true);
-            if (isVoiceOutputEnabled) playVoiceResponse(data.audio_path, data.reply);
         }
-    } catch (e) {
-        document.getElementById(typingId).parentNode.remove();
-        appendMessage("ai", "Erro de comunicação com o backend.", true, true);
-    } finally {
-        sendBtn.disabled = false;
-        chatInput.focus();
-    }
-}
-chatInput.addEventListener("keypress", (e) => { if (e.key === "Enter") sendMessage(); });
-sendBtn.addEventListener("click", sendMessage);
 
-
-// ================= LAYOUT E DATAS =================
-function toggleSidebar() {
-    document.getElementById("sidebar").classList.toggle("open");
-    document.getElementById("sidebarOverlay").classList.toggle("open");
-}
-
-function getTodayString() {
-    const d = new Date();
-    const yyyy = d.getFullYear();
-    const mm = String(d.getMonth() + 1).padStart(2, '0');
-    const dd = String(d.getDate()).padStart(2, '0');
-    return `${yyyy}-${mm}-${dd}`;
-}
-
-function formatDateBr(dateStr) {
-    const parts = dateStr.split('-');
-    if(parts.length !== 3) return dateStr;
-    const dateObj = new Date(parts[0], parts[1]-1, parts[2]);
-    const today = new Date();
-    const yesterday = new Date(today); yesterday.setDate(yesterday.getDate() - 1);
-    
-    if (dateStr === getTodayString()) return "Hoje";
-    if (dateStr === `${yesterday.getFullYear()}-${String(yesterday.getMonth()+1).padStart(2,'0')}-${String(yesterday.getDate()).padStart(2,'0')}`) return "Ontem";
-    return `${parts[2]}/${parts[1]}/${parts[0]}`;
-}
-
-window.onload = async function() {
-    await loadChatHistory();
-    await resumeActiveScans();
-    startPolling(); 
-};
-
-async function loadChatHistory() {
-    try {
-        const res = await fetch('/api/chat_history');
-        allMessages = await res.json();
-        
-        const dates = [...new Set(allMessages.map(m => m.chat_date))];
-        if(dates.length > 0) {
-            selectDate(dates[dates.length - 1]);
-        } else {
-            startNewChat();
-        }
-    } catch(e) { console.error("Erro ao carregar histórico", e); }
-}
-
-function startNewChat() { selectDate(getTodayString()); }
-
-async function deleteChatDate(date) {
-    if(!confirm(`Apagar todo o histórico de auditorias do dia ${formatDateBr(date)}?`)) return;
-    try {
-        const res = await fetch(`/api/chat_history/${date}`, { method: 'DELETE' });
-        if(res.ok) {
-            allMessages = allMessages.filter(m => m.chat_date !== date);
-            if (currentSelectedDate === date) {
-                const remainingDates = [...new Set(allMessages.map(m => m.chat_date))];
-                if(remainingDates.length > 0) selectDate(remainingDates[remainingDates.length - 1]);
-                else startNewChat();
-            } else { renderSidebar(); }
-        }
-    } catch(e) {}
-}
-
-function renderSidebar() {
-    const dates = [...new Set(allMessages.map(m => m.chat_date))];
-    const today = getTodayString();
-    if(!dates.includes(today)) dates.push(today);
-    dates.sort((a,b) => a.localeCompare(b)); 
-    
-    const sidebarList = document.getElementById("sidebarList");
-    sidebarList.innerHTML = "";
-    
-    dates.reverse().forEach(date => {
-        const li = document.createElement("li");
-        const span = document.createElement("span");
-        span.innerHTML = `<i class="far fa-calendar-alt"></i> ${formatDateBr(date)}`;
-        span.style.flex = "1";
-        span.onclick = () => selectDate(date);
-        
-        const delBtn = document.createElement("button");
-        delBtn.innerHTML = `<i class="fas fa-trash-alt"></i>`;
-        delBtn.className = "del-chat-btn";
-        delBtn.onclick = (e) => { e.stopPropagation(); deleteChatDate(date); };
-        
-        li.appendChild(span); li.appendChild(delBtn);
-        if(date === currentSelectedDate) li.classList.add("active");
-        sidebarList.appendChild(li);
-    });
-}
-
-function selectDate(date) {
-    currentSelectedDate = date; renderSidebar(); chatWrapper.innerHTML = ""; 
-    const msgs = allMessages.filter(m => m.chat_date === date);
-    if(msgs.length === 0 && date === getTodayString()) {
-         appendMessage('ai', `Olá, **${CURRENT_USER}**! Sou o Oráculo do Armazém Cloud. ☁️\n\nEstou conectado aos sensores de telemetria e ao motor de SecOps. Como posso ajudar com a infraestrutura hoje?`, false, false);
-    } else {
-         msgs.forEach(msg => appendMessage(msg.sender, msg.content, msg.is_html === 1, false));
-    }
-    
-    if (date === getTodayString()) {
-        for (let scanId in activeScans) {
-            const s = activeScans[scanId];
-            createScanWidget(scanId, s.target, s.stage, s.progress);
-        }
-    }
-    
-    if(window.innerWidth <= 768) {
-        document.getElementById("sidebar").classList.remove("open");
-        document.getElementById("sidebarOverlay").classList.remove("open");
-    }
-}
-
-function scrollToBottom() { chatScroll.scrollTop = chatScroll.scrollHeight; }
-
-function formatMarkdown(text) {
-    // Usando a lib marked.js para processamento seguro (tabelas, listas, negrito)
-    // Além de processar tags HTML puras caso o Python tenha devolvido um <img>
-    let html = marked.parse(text);
-    
-    // Converte botao magico de Nmap
-    html = html.replace(/\[BOTÃO_DOWNLOAD:(.*?)\]/g, "<br><button class='btn-download' onclick=\"window.location.href='/api/download/$1'\"><i class='fas fa-file-download'></i> Fazer Download do Relatório SecOps</button>");
-    return `<div class="ai-markdown">${html}</div>`;
-}
-
-function appendMessage(sender, text, isRawHtml = false, addToHistory = true) {
-    if(addToHistory) {
-        const today = getTodayString();
-        allMessages.push({ sender: sender, content: text, is_html: isRawHtml ? 1 : 0, chat_date: today });
-        if(currentSelectedDate !== today) { selectDate(today); return; }
-    }
-    const msgDiv = document.createElement("div");
-    msgDiv.className = `message ${sender === 'user' ? 'msg-user' : 'msg-ai'}`;
-    let content = isRawHtml ? text : (sender === 'ai' ? formatMarkdown(text) : escapeHTML(text));
-    msgDiv.innerHTML = `<div class="bubble">${content}</div>`;
-    chatWrapper.appendChild(msgDiv);
-    scrollToBottom();
-    return msgDiv;
-}
-
-function escapeHTML(str) { return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
-
-// ================= NMAP WIDGET E POLLING =================
-async function resumeActiveScans() {
-    try {
-        const res = await fetch('/api/active_scans');
-        const scans = await res.json();
-        scans.forEach(scan => {
-            activeScans[scan.id] = { target: scan.target, stage: scan.stage || "Analisando...", progress: Math.round(scan.progress || 0) };
-            if (currentSelectedDate === getTodayString()) {
-                createScanWidget(scan.id, scan.target, activeScans[scan.id].stage, activeScans[scan.id].progress);
-            }
-        });
-    } catch (e) {}
-}
-
-function createScanWidget(scanId, target, stage="Inicializando...", progress=0) {
-    if(document.getElementById(`scan-${scanId}`)) return;
-    const html = `<div class="scan-widget" id="scan-${scanId}"><div class="scan-header"><span class="scan-target"><i class="fas fa-crosshairs"></i> ${target}</span><span class="scan-stage"><span id="stage-text-${scanId}" style="color: var(--muted); font-size: 0.8rem; font-family: monospace;">${stage}</span><span id="stage-pct-${scanId}" style="background: rgba(0,229,255,0.15); color: var(--ai); padding: 2px 8px; border-radius: 12px; font-weight: bold; font-size: 0.85rem;">${progress}%</span></span></div><div class="progress-container"><div class="progress-bar" id="bar-${scanId}" style="width: ${progress}%"></div></div></div>`;
-    appendMessage("ai", html, true, false);
-}
-
-function startPolling() {
-    if (pollingInterval) return;
-    pollingInterval = setInterval(async () => {
-        if (Object.keys(activeScans).length === 0) { clearInterval(pollingInterval); pollingInterval = null; return; }
-        try {
-            const res = await fetch('/api/active_scans');
-            const scans = await res.json();
-            for (let scanId in activeScans) {
-                const activeData = scans.find(s => s.id === scanId);
-                if (activeData) {
-                    const pct = Math.round(activeData.progress);
-                    activeScans[scanId].progress = pct; activeScans[scanId].stage = activeData.stage;
-                    const textEl = document.getElementById(`stage-text-${scanId}`); if (textEl) textEl.innerText = activeData.stage || "Analisando...";
-                    const pctEl = document.getElementById(`stage-pct-${scanId}`); if (pctEl) pctEl.innerText = `${pct}%`;
-                    const barEl = document.getElementById(`bar-${scanId}`); if (barEl) barEl.style.width = `${pct}%`;
-                } else {
-                    const textEl = document.getElementById(`stage-text-${scanId}`); if (textEl) textEl.innerText = `Finalizando...`;
-                    const pctEl = document.getElementById(`stage-pct-${scanId}`); if (pctEl) pctEl.innerText = `100%`;
-                    const barEl = document.getElementById(`bar-${scanId}`); if (barEl) { barEl.style.width = `100%`; barEl.style.background = `#3fb950`; }
-                    fetchResultAndAppend(scanId, activeScans[scanId].target);
-                    delete activeScans[scanId];
-                }
-            }
-        } catch (e) {}
-    }, 2500);
-}
-
-async function fetchResultAndAppend(scanId, target) {
-    try {
-        const res = await fetch(`/api/history/${scanId}?tts_enabled=${isAgentModeActive || isVoiceOutputEnabled}`);
-        const data = await res.json();
-        if (data.error) {
-            appendMessage("ai", `⚠️ **Falha na auditoria de ${target}:** ${data.error}`, false, true);
-            if(isAgentModeActive || isVoiceOutputEnabled) playVoiceResponse(data.audio_path, `Atenção. Houve uma falha no rastreio do alvo ${target}.`);
-            return;
-        }
-        let reportText = `${data.ai_analysis}\n\n[BOTÃO_DOWNLOAD:${scanId}]`;
-        appendMessage("ai", reportText, false, true);
-        if(isAgentModeActive || isVoiceOutputEnabled) playVoiceResponse(data.audio_path, `Rastreio concluído para o alvo ${target}. O relatório executivo está na tela.`);
-    } catch(e) {}
-}
-
-
-// ================= GESTÃO DE ADMINISTRAÇÃO =================
-{% if role == 'admin' %}
-let editingUserId = null;
-let allUsers = [];
-
-function openAdminModal() { document.getElementById('adminModal').style.display = 'flex'; loadUsers(); }
-function closeAdminModal() { document.getElementById('adminModal').style.display = 'none'; cancelEdit(); }
-
-async function loadUsers() {
-    const res = await fetch('/api/users');
-    allUsers = await res.json();
-    const tbody = document.getElementById('userList');
-    tbody.innerHTML = '';
-    allUsers.forEach(u => {
-        let roleBadge = u.role === 'admin' ? `<span class="badge" style="background:rgba(210,153,34,0.2); color:var(--warn)">ADMIN</span>` : `<span class="badge" style="background:rgba(46,160,67,0.2); color:#3fb950">CLIENTE</span>`;
-        let aiBadge = `<span style="font-size:0.8em; color:#8b949e;">${u.ai_provider} / ${u.ai_model.substring(0, 15)}...</span>`;
-        tbody.innerHTML += `<tr>
-            <td>${u.id}</td>
-            <td><b>${u.username}</b></td>
-            <td>${roleBadge}</td>
-            <td><span style="font-family:monospace; color:var(--ai)">${u.client_group}</span></td>
-            <td>${aiBadge}</td>
-            <td style="text-align:right;">
-                <button onclick="editUser(${u.id})" class="btn-small" style="background:#1f6feb; margin-right:5px;"><i class="fas fa-edit"></i></button>
-                <button onclick="deleteUser(${u.id})" class="btn-small btn-delete"><i class="fas fa-trash"></i></button>
-            </td>
-        </tr>`;
-    });
-}
-
-function editUser(id) {
-    const user = allUsers.find(u => u.id === id);
-    if(!user) return;
-    
-    editingUserId = id;
-    document.getElementById('nUser').value = user.username;
-    document.getElementById('nUser').disabled = true;
-    document.getElementById('nPass').placeholder = "Vazio p/ manter";
-    document.getElementById('nPass').value = '';
-    document.getElementById('nRole').value = user.role;
-    document.getElementById('nToken').value = user.zabbix_token || '';
-    document.getElementById('nGroup').value = user.client_group || '';
-    document.getElementById('nAiProvider').value = user.ai_provider || 'oci';
-    document.getElementById('nAiKey').value = '';
-    document.getElementById('nAiModel').value = user.ai_model || 'cohere.command-r-16k';
-    
-    const btn = document.getElementById('saveAdminBtn');
-    btn.innerHTML = "<i class='fas fa-sync'></i> Atualizar";
-    btn.style.background = "var(--warn)";
-    btn.style.color = "#000";
-    document.getElementById('cancelEditBtn').style.display = 'inline-block';
-}
-
-function cancelEdit() {
-    editingUserId = null;
-    document.getElementById('nUser').value = '';
-    document.getElementById('nUser').disabled = false;
-    document.getElementById('nPass').value = '';
-    document.getElementById('nPass').placeholder = "Senha";
-    document.getElementById('nRole').value = 'user';
-    document.getElementById('nToken').value = '';
-    document.getElementById('nGroup').value = '';
-    document.getElementById('nAiProvider').value = 'oci';
-    document.getElementById('nAiKey').value = '';
-    document.getElementById('nAiModel').value = '';
-    
-    const btn = document.getElementById('saveAdminBtn');
-    btn.innerHTML = "<i class='fas fa-save'></i> Salvar Registro";
-    btn.style.background = "var(--accent)";
-    btn.style.color = "#fff";
-    document.getElementById('cancelEditBtn').style.display = 'none';
-}
-
-async function saveUser() {
-    const payload = {
-        username: document.getElementById('nUser').value,
-        password: document.getElementById('nPass').value,
-        role: document.getElementById('nRole').value,
-        zabbix_token: document.getElementById('nToken').value,
-        client_group: document.getElementById('nGroup').value || 'GLOBAL',
-        ai_provider: document.getElementById('nAiProvider').value,
-        ai_api_key: document.getElementById('nAiKey').value,
-        ai_model: document.getElementById('nAiModel').value
-    };
-    
-    if(!payload.username) return;
-    
-    let url = editingUserId ? '/api/users/' + editingUserId : '/api/users';
-    let method = editingUserId ? 'PUT' : 'POST';
-
-    await fetch(url, { method: method, headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
-    cancelEdit();
-    loadUsers();
-}
-
-async function deleteUser(id) {
-    if(confirm('Excluir cliente do sistema permanentemente?')) {
-        await fetch('/api/users/'+id, { method: 'DELETE' });
-        loadUsers();
-    }
-}
-window.onclick = function(event) { if (event.target == document.getElementById('adminModal')) closeAdminModal(); }
-{% endif %}
-</script>
+        window.onload = loadHistory;
+    </script>
 </body>
 </html>
