@@ -6,7 +6,6 @@ from config import DB_PATH
 
 bp = Blueprint('chat', __name__)
 
-# BLINDAGEM CONTRA 404: Aceita tanto a raiz quanto /chat
 @bp.route("/")
 @bp.route("/chat")
 @login_required
@@ -23,7 +22,11 @@ def index():
 def send_message():
     data = request.json
     message = data.get("message", "").strip()
-    if not message: return jsonify({"error": "Mensagem vazia"}), 400
+    # Captura se o usuário ativou o alto-falante na tela
+    tts_enabled = data.get("tts_enabled", False)
+    
+    if not message: 
+        return jsonify({"error": "Mensagem vazia"}), 400
 
     username = session.get('username')
     
@@ -40,7 +43,8 @@ def send_message():
                 token_zabbix = row['token_zabbix']
                 grupo_cliente = row['grupo_cliente']
                 zabbix_url = row['zabbix_url']
-    except Exception as e: return jsonify({"error": f"Erro ao carregar credenciais: {str(e)}"}), 500
+    except Exception as e: 
+        return jsonify({"error": f"Erro ao carregar credenciais: {str(e)}"}), 500
 
     chat_history_rows = []
     try:
@@ -52,10 +56,12 @@ def send_message():
             chat_history_rows = list(c.fetchall())
             chat_history_rows.reverse()
             conn.commit()
-    except Exception as e: return jsonify({"error": f"Erro no histórico: {str(e)}"}), 500
+    except Exception as e: 
+        return jsonify({"error": f"Erro no histórico: {str(e)}"}), 500
 
+    # Injeta dinamicamente o status do tts_enabled vindo do clique do usuário
     res = process_oraculo_message(
-        message, username, token_zabbix, grupo_cliente, tts_enabled=False, 
+        message, username, token_zabbix, grupo_cliente, tts_enabled=tts_enabled, 
         history_rows=chat_history_rows, zabbix_url=zabbix_url
     )
 

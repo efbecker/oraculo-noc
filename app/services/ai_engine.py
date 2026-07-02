@@ -32,7 +32,6 @@ def get_user_profile(username):
     except: return "CLIENTE"
 
 def get_user_zabbix_url(username):
-    """Nova função: Busca a URL específica do Zabbix do Inquilino/Cliente"""
     try:
         with sqlite3.connect(DB_PATH, timeout=15) as conn:
             c = conn.cursor()
@@ -50,37 +49,38 @@ def obter_contexto_zabbix_real_time(token, grupo, url=None):
 
 def exec_chat_with_oracle(prompt, username="admin", context="", chat_history_rows=None):
     model_id = get_user_model(username)
-    signer = oci.auth.signers.InstancePrincipalsSecurityTokenSigner()
-    client = oci.generative_ai_inference.GenerativeAiInferenceClient(
-        config={}, signer=signer, service_endpoint=OCI_ENDPOINT, retry_strategy=oci.retry.NoneRetryStrategy()
-    )
-    
-    preamble = f"""Você é o Oráculo, um especialista de NOC Sênior. 
-    SEMPRE consulte o contexto abaixo para responder. Se o usuário perguntar por algo que está no contexto, use os dados exatos.
-    CONTEXTO ATUAL: {context}
-    Seja direto, técnico e use bullet points."""
-    
-    cohere_history = []
-    if chat_history_rows:
-        for row in chat_history_rows:
-            if row['is_html'] == 1: continue
-            role = "USER" if row['sender'] == 'user' else "CHATBOT"
-            cohere_history.append(oci.generative_ai_inference.models.CohereChatBotMessage(role=role, message=row['content']))
-            
-    chat_request = oci.generative_ai_inference.models.CohereChatRequest(
-        api_format="COHERE", message=prompt, chat_history=cohere_history, preamble_override=preamble, max_tokens=2048, temperature=0.3
-    )
-    details = oci.generative_ai_inference.models.ChatDetails(
-        compartment_id=OCI_COMPARTMENT_ID, serving_mode=oci.generative_ai_inference.models.OnDemandServingMode(model_id=model_id), chat_request=chat_request
-    )
-    resp = client.chat(details)
-    return resp.data.chat_response.text
+    try:
+        signer = oci.auth.signers.InstancePrincipalsSecurityTokenSigner()
+        client = oci.generative_ai_inference.GenerativeAiInferenceClient(
+            config={}, signer=signer, service_endpoint=OCI_ENDPOINT, retry_strategy=oci.retry.NoneRetryStrategy()
+        )
+        
+        preamble = f"""Você é o Oráculo, um especialista de NOC Sênior. 
+        SEMPRE consulte o contexto abaixo para responder. Se o usuário perguntar por algo que está no contexto, use os dados exatos.
+        CONTEXTO ATUAL: {context}
+        Seja direto, técnico e use bullet points."""
+        
+        cohere_history = []
+        if chat_history_rows:
+            for row in chat_history_rows:
+                if row['is_html'] == 1: continue
+                role = "USER" if row['sender'] == 'user' else "CHATBOT"
+                cohere_history.append(oci.generative_ai_inference.models.CohereChatBotMessage(role=role, message=row['content']))
+                
+        chat_request = oci.generative_ai_inference.models.CohereChatRequest(
+            api_format="COHERE", message=prompt, chat_history=cohere_history, preamble_override=preamble, max_tokens=2048, temperature=0.3
+        )
+        details = oci.generative_ai_inference.models.ChatDetails(
+            compartment_id=OCI_COMPARTMENT_ID, serving_mode=oci.generative_ai_inference.models.OnDemandServingMode(model_id=model_id), chat_request=chat_request
+        )
+        resp = client.chat(details)
+        return resp.data.chat_response.text
+    except Exception as e:
+        # AIRBAG: Se o modelo falhar, ele cospe o erro exato na tela!
+        return f"⚠️ **Erro na IA (Oracle OCI):**\nVerifique se o modelo '{model_id}' está correto no Painel Admin.\nDetalhe do erro: `{str(e)}`"
 
 def process_oraculo_message(message, username, token_zabbix, grupo_cliente, tts_enabled=False, history_rows=None, zabbix_url=None):
-    # Fallback genial: Se a rota do chat não mandou URL, o cérebro puxa do banco!
-    if not zabbix_url:
-        zabbix_url = get_user_zabbix_url(username)
-
+    if not zabbix_url: zabbix_url = get_user_zabbix_url(username)
     context = obter_contexto_zabbix_real_time(token_zabbix, grupo_cliente, zabbix_url)
     msg_l = message.lower()
 
@@ -93,8 +93,7 @@ def process_oraculo_message(message, username, token_zabbix, grupo_cliente, tts_
         target_match = re.search(r'(?:do|da|servidor|vm|host)\s+([a-zA-Z0-9_-]+)', msg_l)
         if target_match: target = target_match.group(1)
         
-        if target == "TODOS":
-            reply = gerar_relatorio_consumo_todos(dias, token_zabbix, grupo_cliente, zabbix_url)
+        if target == "TODOS": reply = gerar_relatorio_consumo_todos(dias, token_zabbix, grupo_cliente, zabbix_url)
         else:
             metrica = "CPU"
             if any(x in msg_l for x in ['memoria', 'memória']): metrica = "MEMORIA"
@@ -102,7 +101,7 @@ def process_oraculo_message(message, username, token_zabbix, grupo_cliente, tts_
             elif 'rede' in msg_l: metrica = "REDE"
             reply = gerar_grafico_zabbix(target, metrica, dias, token_zabbix, zabbix_url)
         
-        return {"reply": reply, "audio_path": create_tts_audio("Relatório concluído, efetue o download.") if tts_enabled else None, "is_html": 1}
+        return {"reply": reply, "audio_path": None, "is_html": 1}
 
     if any(p in msg_l for p in ['scan', 'nmap', 'secops', 'vulnerabilidade']):
         perfil = get_user_profile(username)
@@ -114,4 +113,4 @@ def process_oraculo_message(message, username, token_zabbix, grupo_cliente, tts_
         return {"action": "scan", "target": target, "scan_id": scan_id}
 
     reply = exec_chat_with_oracle(message, username=username, context=context, chat_history_rows=history_rows)
-    return {"reply": reply, "audio_path": create_tts_audio(reply) if tts_enabled else None}
+    return {"reply": reply, "audio_path": None}
