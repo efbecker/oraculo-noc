@@ -7,34 +7,38 @@
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #121212; color: #e0e0e0; margin: 0; display: flex; height: 100vh; }
         .chat-container { flex: 1; display: flex; flex-direction: column; background-color: #161616; }
-        .chat-header { background-color: #1e1e1e; padding: 15px 25px; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center; }
-        .chat-title { font-size: 18px; font-weight: bold; color: #00e5ff; display: flex; align-items: center; gap: 10px; }
-        .user-info { display: flex; align-items: center; gap: 15px; font-size: 14px; color: #aaa; }
         
-        /* Estilização dos Botões Superiores */
-        .btn-header { padding: 6px 12px; border-radius: 4px; font-weight: bold; text-decoration: none; font-size: 13px; transition: 0.3s; display: inline-flex; align-items: center; gap: 5px; }
-        .btn-admin { background-color: #242424; color: #00e5ff; border: 1px solid #00e5ff; }
-        .btn-admin:hover { background-color: #00e5ff; color: #121212; }
-        .btn-logout { background-color: #ff4d4d; color: white; border: none; }
-        .btn-logout:hover { background-color: #ff1a1a; }
+        /* Cabeçalho Clássico */
+        .chat-header { background-color: #1e1e1e; padding: 18px 25px; border-bottom: 1px solid #2a2a2a; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 4px 10px rgba(0,0,0,0.4); }
+        .chat-title { font-size: 19px; font-weight: 700; color: #00e5ff; display: flex; align-items: center; gap: 12px; letter-spacing: 0.5px; }
+        .user-info { display: flex; align-items: center; gap: 15px; font-size: 14px; color: #b0b0b0; }
         
-        .chat-messages { flex: 1; padding: 25px; overflow-y: auto; display: flex; flex-direction: column; gap: 15px; }
-        .message { max-width: 80%; padding: 12px 18px; border-radius: 8px; line-height: 1.5; font-size: 14px; word-wrap: break-word; }
-        .message.user { background-color: #0077ff; color: white; align-self: flex-end; border-bottom-right-radius: 2px; }
-        .message.bot { background-color: #242424; color: #e0e0e0; align-self: flex-start; border-bottom-left-radius: 2px; border: 1px solid #333; }
-        .chat-input-container { padding: 20px; background-color: #1e1e1e; border-top: 1px solid #333; display: flex; gap: 12px; }
-        .chat-input { flex: 1; background-color: #121212; color: white; border: 1px solid #444; padding: 12px 15px; border-radius: 6px; font-size: 14px; outline: none; }
-        .chat-input:focus { border-color: #00e5ff; }
-        .btn-send { background-color: #00e5ff; color: #121212; border: none; padding: 0 20px; border-radius: 6px; font-weight: bold; cursor: pointer; transition: 0.3s; }
-        .btn-send:hover { background-color: #00b4d8; }
+        /* Estilo Premium dos Botões */
+        .btn-header { padding: 8px 16px; border-radius: 5px; font-weight: bold; text-decoration: none; font-size: 13px; transition: all 0.3s ease; display: inline-flex; align-items: center; gap: 6px; box-sizing: border-box; }
+        .btn-admin { background-color: #1a1a1a; color: #00e5ff; border: 1px solid #00e5ff; box-shadow: 0 0 10px rgba(0,229,255,0.1); }
+        .btn-admin:hover { background-color: #00e5ff; color: #121212; box-shadow: 0 0 15px rgba(0,229,255,0.4); }
+        .btn-logout { background-color: #2a1f1f; color: #ff4d4d; border: 1px solid #ff4d4d; }
+        .btn-logout:hover { background-color: #ff4d4d; color: white; box-shadow: 0 0 15px rgba(255,77,77,0.4); }
+        
+        /* Mensagens e Caixa de Entrada */
+        .chat-messages { flex: 1; padding: 30px; overflow-y: auto; display: flex; flex-direction: column; gap: 20px; background: linear-gradient(180deg, #141414 0%, #161616 100%); }
+        .message { max-width: 75%; padding: 14px 20px; border-radius: 8px; line-height: 1.6; font-size: 14.5px; word-wrap: break-word; box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
+        .message.user { background: linear-gradient(135deg, #0055ff 0%, #0077ff 100%); color: white; align-self: flex-end; border-bottom-right-radius: 2px; }
+        .message.bot { background-color: #1e1e1e; color: #e0e0e0; align-self: flex-start; border-bottom-left-radius: 2px; border: 1px solid #2d2d2d; }
+        
+        .chat-input-container { padding: 20px 30px; background-color: #1e1e1e; border-top: 1px solid #2a2a2a; display: flex; gap: 15px; box-shadow: 0 -4px 15px rgba(0,0,0,0.3); }
+        .chat-input { flex: 1; background-color: #121212; color: white; border: 1px solid #3d3d3d; padding: 14px 18px; border-radius: 6px; font-size: 14px; outline: none; transition: border 0.3s; }
+        .chat-input:focus { border-color: #00e5ff; box-shadow: 0 0 8px rgba(0,229,255,0.2); }
+        .btn-send { background: linear-gradient(135deg, #00e5ff 0%, #00b4d8 100%); color: #121212; border: none; padding: 0 25px; border-radius: 6px; font-weight: bold; cursor: pointer; transition: 0.3s; font-size: 14px; }
+        .btn-send:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,229,255,0.3); }
     </style>
 </head>
 <body>
     <div class="chat-container">
         <div class="chat-header">
-            <div class="chat-title">🤖 Oráculo NOC & SecOps <span style="font-size:11px; background:#242424; color:#888; padding:2px 6px; border-radius:4px; border:1px solid #333;">{{ grupo_cliente }}</span></div>
+            <div class="chat-title">🤖 Oráculo NOC & SecOps <span style="font-size:11px; background:#282828; color:#00e5ff; padding:3px 8px; border-radius:4px; border:1px solid #3a3d3d; font-family:monospace;">{{ grupo_cliente }}</span></div>
             <div class="user-info">
-                <span>Olá, <strong>{{ username }}</strong> ({{ profile }})</span>
+                <span>Operador: <strong style="color:#fff;">{{ username }}</strong> <span style="font-size:11px; color:#888;">({{ profile }})</span></span>
                 
                 {% if profile == 'ADMINISTRADOR' %}
                 <a href="/admin" class="btn-header btn-admin">⚙️ Painel Admin</a>
@@ -47,7 +51,7 @@
         <div class="chat-messages" id="chatMessages"></div>
 
         <div class="chat-input-container">
-            <input type="text" class="chat-input" id="chatInput" placeholder="Pergunte ao Oráculo (ex: Como está a infra? Gerar relatório FinOps de 7 dias...)" onkeypress="if(event.key==='Enter') sendMessage()">
+            <input type="text" class="chat-input" id="chatInput" placeholder="Digite sua instrução de NOC ou SecOps..." onkeypress="if(event.key==='Enter') sendMessage()">
             <button class="btn-send" onclick="sendMessage()">Enviar</button>
         </div>
     </div>

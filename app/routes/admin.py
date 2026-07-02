@@ -9,146 +9,204 @@ HTML_TEMPLATE = """
 <html lang="pt-br">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Painel Admin - Oráculo</title>
     <style>
-        body { background-color: #121212; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, sans-serif; padding: 20px; }
-        .container { max-width: 1200px; margin: auto; background: #1e1e1e; padding: 30px; border-radius: 8px; border: 1px solid #333; }
-        table { width: 100%; border-collapse: collapse; margin-top: 20px; background: #161616; }
-        th, td { border: 1px solid #333; padding: 12px; text-align: left; font-size: 14px; }
-        th { background-color: #2a2a2a; color: #00e5ff; }
-        input, select { background: #121212; color: white; border: 1px solid #444; padding: 8px; width: 95%; border-radius: 4px; }
-        button { background-color: #00e5ff; color: #121212; border: none; padding: 8px 15px; cursor: pointer; font-weight: bold; border-radius: 4px; transition: 0.3s; }
-        button:hover { background-color: #00b4d8; }
-        .btn-danger { background-color: #ff4d4d; color: white; }
+        body { background-color: #121212; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, sans-serif; padding: 15px; margin: 0; }
+        .container { max-width: 1200px; margin: auto; background: #1e1e1e; padding: 25px; border-radius: 8px; border: 1px solid #333; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; padding-bottom: 15px; margin-bottom: 25px; flex-wrap: wrap; gap: 15px; }
+        .header h1 { color: #00e5ff; margin: 0; font-size: 24px; }
+        
+        /* Formulário em Grid Responsivo (Perfeito para Celular) */
+        .form-container { background: #161616; padding: 20px; border-radius: 6px; border: 1px solid #333; margin-bottom: 30px; }
+        .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 15px; margin-bottom: 20px; }
+        .form-group { display: flex; flex-direction: column; gap: 6px; }
+        .form-group label { font-size: 13px; color: #aaa; font-weight: bold; }
+        
+        input, select { background: #121212; color: white; border: 1px solid #444; padding: 10px; border-radius: 4px; font-size: 14px; width: 100%; box-sizing: border-box; }
+        input:focus, select:focus { border-color: #00e5ff; outline: none; }
+        
+        /* Lista de Clientes Blindada para Telas Pequenas */
+        .table-responsive { overflow-x: auto; background: #161616; border-radius: 6px; border: 1px solid #333; margin-top: 15px; }
+        table { width: 100%; border-collapse: collapse; min-width: 900px; }
+        th, td { border-bottom: 1px solid #2a2a2a; padding: 12px; text-align: left; font-size: 14px; }
+        th { background-color: #242424; color: #00e5ff; font-weight: 600; text-transform: uppercase; font-size: 12px; letter-spacing: 0.5px; }
+        tr:hover td { background-color: #1e1e1e; }
+        
+        .btn-submit { background-color: #00e5ff; color: #121212; border: none; padding: 12px 25px; cursor: pointer; font-weight: bold; border-radius: 4px; transition: 0.3s; font-size: 14px; width: auto; display: inline-block; }
+        .btn-submit:hover { background-color: #00b4d8; }
+        .btn-danger { background-color: #ff4d4d; color: white; border: none; padding: 6px 12px; cursor: pointer; border-radius: 4px; font-size: 12px; font-weight: bold; }
         .btn-danger:hover { background-color: #ff1a1a; }
-        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; padding-bottom: 15px; margin-bottom: 20px; }
-        .logout { background-color: #ff4d4d; color: white; text-decoration: none; padding: 8px 15px; border-radius: 4px; font-weight: bold; }
+        .btn-edit { background-color: #ff9e00; color: #121212; border: none; padding: 6px 12px; cursor: pointer; border-radius: 4px; font-size: 12px; font-weight: bold; text-decoration: none; }
+        .btn-edit:hover { background-color: #e68a00; }
+        .logout { background-color: #ff4d4d; color: white; text-decoration: none; padding: 8px 15px; border-radius: 4px; font-weight: bold; font-size: 13px; }
+        .actions-cell { display: flex; gap: 8px; }
+        
+        @media (max-width: 768px) {
+            .header { flex-direction: column; align-items: flex-start; }
+            .header div { width: 100%; display: flex; justify-content: space-between; margin-top: 5px; }
+            .btn-submit { width: 100%; text-align: center; }
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1 style="color: #00e5ff; margin: 0;">⚙️ Gestão de Clientes (Multi-Tenant)</h1>
+            <h1>⚙️ Gestão de Clientes & Contas (Multi-Tenant)</h1>
             <div>
-                <a href="/chat" style="color: #00e5ff; margin-right: 20px; text-decoration: none; font-weight: bold;">💬 Voltar ao Chat</a>
+                <a href="/chat" style="color: #00e5ff; margin-right: 20px; text-decoration: none; font-weight: bold; font-size: 14px; align-self: center;">💬 Voltar ao Chat</a>
                 <a href="/logout" class="logout">Sair</a>
             </div>
         </div>
         
-        <h3>Cadastrar / Atualizar Cliente</h3>
-        <form method="POST" action="/admin/save">
-            <table>
-                <tr>
-                    <th>Usuário (Login)</th>
-                    <th>Senha</th>
-                    <th>Perfil</th>
-                    <th>Grupo Zabbix</th>
-                    <th>Zabbix URL (Específica)</th>
-                    <th>Token Zabbix</th>
-                    <th>Ação</th>
-                </tr>
-                <tr>
-                    <td><input type="text" name="username" placeholder="ex: pollux" required></td>
-                    <td><input type="text" name="password" placeholder="Nova Senha"></td>
-                    <td>
-                        <select name="profile">
+        <div class="form-container">
+            <h3 id="form-title" style="color: #ff9e00; margin-top: 0; margin-bottom: 20px;">Cadastrar / Atualizar Conta</h3>
+            <form method="POST" action="/admin/save" id="userForm">
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label>Usuário (Login)</label>
+                        <input type="text" name="username" id="form-username" placeholder="ex: pollux" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Senha</label>
+                        <input type="text" name="password" id="form-password" placeholder="Senha (vazio p/ manter)">
+                    </div>
+                    <div class="form-group">
+                        <label>Perfil de Acesso</label>
+                        <select name="profile" id="form-profile">
                             <option value="CLIENTE">CLIENTE</option>
                             <option value="NOC">NOC</option>
-                            <option value="ADMIN">ADMINISTRADOR</option>
+                            <option value="ADMINISTRADOR">ADMINISTRADOR</option>
                         </select>
-                    </td>
-                    <td><input type="text" name="grupo_cliente" placeholder="VDC_POLLUX" required></td>
-                    <td><input type="url" name="zabbix_url" placeholder="https://zabbix.cliente.com/api_jsonrpc.php"></td>
-                    <td><input type="text" name="token_zabbix" placeholder="Token da API"></td>
-                    <td><button type="submit">Salvar</button></td>
-                </tr>
-            </table>
-        </form>
+                    </div>
+                    <div class="form-group">
+                        <label>Grupo Zabbix</label>
+                        <input type="text" name="grupo_cliente" id="form-grupo" placeholder="VDC_POLLUX" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Modelo de LLM (Oracle OCI)</label>
+                        <input type="text" name="ai_model" id="form-model" placeholder="cohere.command-r-08-2024" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Zabbix URL (Específica)</label>
+                        <input type="url" name="zabbix_url" id="form-url" placeholder="https://.../api_jsonrpc.php">
+                    </div>
+                    <div class="form-group">
+                        <label>Token Zabbix</label>
+                        <input type="text" name="token_zabbix" id="form-token" placeholder="Token da API">
+                    </div>
+                </div>
+                <button type="submit" class="btn-submit" id="form-submit-btn">Salvar Configuração</button>
+            </form>
+        </div>
 
-        <h3 style="margin-top: 40px;">Clientes Cadastrados no Oráculo</h3>
-        <table>
-            <tr>
-                <th style="width: 50px;">ID</th>
-                <th>Usuário</th>
-                <th>Perfil</th>
-                <th>Grupo Zabbix</th>
-                <th>Zabbix URL Endpoint</th>
-                <th style="width: 80px;">Ações</th>
-            </tr>
-            {% for u in users %}
-            <tr>
-                <td>{{ u[0] }}</td>
-                <td><strong>{{ u[1] }}</strong></td>
-                <td>{{ u[3] }}</td>
-                <td><span style="color:#ff9e00; font-family: monospace;">{{ u[4] }}</span></td>
-                <td><span style="color:#00e676; font-size: 12px;">{{ u[6] if u[6] else '🌍 Padrão Global (config.py)' }}</span></td>
-                <td>
-                    <form method="POST" action="/admin/delete" style="margin: 0;">
-                        <input type="hidden" name="id" value="{{ u[0] }}">
-                        <button type="submit" class="btn-danger">Excluir</button>
-                    </form>
-                </td>
-            </tr>
-            {% endfor %}
-        </table>
+        <h3>Contas Cadastradas no Oráculo</h3>
+        <div class="table-responsive">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 50px;">ID</th>
+                        <th>Usuário</th>
+                        <th>Perfil</th>
+                        <th>Grupo Zabbix</th>
+                        <th>Modelo LLM</th>
+                        <th>Zabbix URL Endpoint</th>
+                        <th style="width: 150px;">Ações</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for u in users %}
+                    <tr>
+                        <td>{{ u[0] }}</td>
+                        <td><strong>{{ u[1] }}</strong></td>
+                        <td>{{ u[3] }}</td>
+                        <td><span style="color:#ff9e00; font-family: monospace;">{{ u[4] }}</span></td>
+                        <td><span style="color:#00e5ff; font-family: monospace; font-size: 13px;">{{ u[7] }}</span></td>
+                        <td><span style="color:#00e676; font-size: 12px;">{{ u[6] if u[6] else '🌍 Padrão Global (config.py)' }}</span></td>
+                        <td class="actions-cell">
+                            <button type="button" class="btn-edit" onclick="editarUsuario('{{ u[1] }}', '{{ u[3] }}', '{{ u[4] }}', '{{ u[7] }}', '{{ u[6] }}', '{{ u[5] }}')">Editar</button>
+                            <form method="POST" action="/admin/delete" style="margin: 0;" onsubmit="return confirm('Deseja excluir este usuário?');">
+                                <input type="hidden" name="id" value="{{ u[0] }}">
+                                <button type="submit" class="btn-danger">Excluir</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
     </div>
+
+    <script>
+        function editarUsuario(username, profile, grupo, model, url, token) {
+            document.getElementById('form-title').innerHTML = "📝 Editando Conta: <strong style='color:#00e5ff;'>" + username + "</strong>";
+            document.getElementById('form-username').value = username;
+            document.getElementById('form-username').readOnly = true;
+            document.getElementById('form-profile').value = profile;
+            document.getElementById('form-grupo').value = grupo;
+            document.getElementById('form-model').value = model || 'cohere.command-r-08-2024';
+            document.getElementById('form-url').value = url;
+            document.getElementById('form-token').value = token;
+            document.getElementById('form-password').placeholder = "Deixe em branco p/ não alterar";
+            document.getElementById('form-submit-btn').innerText = "Atualizar Conta";
+            window.scrollTo({top: 0, behavior: 'smooth'});
+        }
+    </script>
 </body>
 </html>
 """
 
+@bp.route('/', methods=['GET'])
 @bp.route('/admin', methods=['GET'])
 def index():
     if session.get('profile') not in ['ADMIN', 'ADMINISTRADOR']:
         return "Acesso Negado.", 403
-    
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT id, username, password, profile, grupo_cliente, token_zabbix, zabbix_url FROM users")
+    c.execute("SELECT id, username, password, profile, grupo_cliente, token_zabbix, zabbix_url, ai_model FROM users")
     users = c.fetchall()
     conn.close()
-    
     return render_template_string(HTML_TEMPLATE, users=users)
 
 @bp.route('/admin/save', methods=['POST'])
+@bp.route('/save', methods=['POST'])
 def save_user():
     if session.get('profile') not in ['ADMIN', 'ADMINISTRADOR']:
         return "Acesso Negado.", 403
-        
     username = request.form.get('username').strip()
     password = request.form.get('password')
     profile = request.form.get('profile')
     grupo_cliente = request.form.get('grupo_cliente').strip()
     token_zabbix = request.form.get('token_zabbix').strip()
     zabbix_url = request.form.get('zabbix_url').strip()
+    ai_model = request.form.get('ai_model').strip()
     
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    
     c.execute("SELECT id FROM users WHERE username=?", (username,))
     user = c.fetchone()
     
     if user:
-        query = "UPDATE users SET profile=?, grupo_cliente=?, zabbix_url=?"
-        params = [profile, grupo_cliente, zabbix_url]
-        if password:
+        query = "UPDATE users SET profile=?, grupo_cliente=?, zabbix_url=?, ai_model=?"
+        params = [profile, grupo_cliente, zabbix_url, ai_model]
+        if password and password.strip() != "":
             query += ", password=?"
             params.append(password)
         if token_zabbix:
             query += ", token_zabbix=?"
             params.append(token_zabbix)
-            
         query += " WHERE username=?"
         params.append(username)
         c.execute(query, tuple(params))
     else:
         c.execute("INSERT INTO users (username, password, profile, grupo_cliente, token_zabbix, zabbix_url, ai_model) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                  (username, password, profile, grupo_cliente, token_zabbix, zabbix_url, "cohere.command-r-08-2024"))
-                  
+                  (username, password, profile, grupo_cliente, token_zabbix, zabbix_url, ai_model))
     conn.commit()
     conn.close()
-    return redirect(url_for('admin.index'))
+    return redirect(request.referrer or url_for('admin.index'))
 
 @bp.route('/admin/delete', methods=['POST'])
+@bp.route('/delete', methods=['POST'])
 def delete_user():
     if session.get('profile') not in ['ADMIN', 'ADMINISTRADOR']:
         return "Acesso Negado.", 403
@@ -158,4 +216,4 @@ def delete_user():
     c.execute("DELETE FROM users WHERE id=?", (user_id,))
     conn.commit()
     conn.close()
-    return redirect(url_for('admin.index'))
+    return redirect(request.referrer or url_for('admin.index'))
