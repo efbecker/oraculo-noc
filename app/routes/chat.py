@@ -134,6 +134,12 @@ def download_report(scan_id):
             target = row[0]
             ai_text = json.loads(row[1]).get("ai_analysis", "")
             
+            # Transforma cada CVE-xxxx-xxxx em link clicável para o NVD (antes das demais conversões).
+            ai_text = re.sub(
+                r'\bCVE-\d{4}-\d{4,7}\b',
+                lambda m: f'<a href="https://nvd.nist.gov/vuln/detail/{m.group(0)}" target="_blank" style="color:#c0392b; font-weight:bold">{m.group(0)}</a>',
+                ai_text
+            )
             html_content = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', ai_text)
             html_content = re.sub(r'### (.*?)\n', r'<h3>\1</h3>\n', html_content)
             html_content = re.sub(r'## (.*?)\n', r'<h2>\1</h2>\n', html_content)

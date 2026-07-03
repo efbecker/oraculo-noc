@@ -70,6 +70,27 @@ def parse_nmap_xml_file(file_path):
     except Exception:
         return []
 
+# Extrai de forma determinística as CVEs (e o CVSS quando presente) de dentro
+# da saída dos scripts do Nmap. Assim garantimos as referências mesmo que a IA
+# esqueça de citar alguma. Retorna [(cve, score|None), ...] ordenado por severidade.
+CVE_RE = re.compile(r"(CVE-\d{4}-\d{4,7})(?:\s*[:\-]?\s*(\d{1,2}\.\d))?", re.IGNORECASE)
+
+def extract_cves(scan_data):
+    encontrados = {}
+    for host in scan_data:
+        for port in host.get("ports", []):
+            for v in port.get("vulns", []):
+                texto = f"{v.get('id', '')} {v.get('output', '')}"
+                for m in CVE_RE.finditer(texto):
+                    cve = m.group(1).upper()
+                    score = m.group(2)
+                    if cve not in encontrados or (score and not encontrados[cve]):
+                        encontrados[cve] = score
+    def _sev(item):
+        _cve, sc = item
+        return (-(float(sc) if sc else -1.0), _cve)
+    return sorted(encontrados.items(), key=_sev)
+
 def update_scan_progress(scan_id, progress, stage, status="running", result_json=None):
     try:
         with sqlite3.connect(DB_PATH, timeout=20) as conn:
@@ -199,15 +220,50 @@ def start_scan_thread(target, username, tts_enabled=False):
                 scan_data = parse_nmap_xml_file(xml_path)
 
                 if scan_data:
+                    cves = extract_cves(scan_data)
+                    lista_cves = ", ".join(cve for cve, _ in cves) if cves else "nenhuma CVE explícita identificada"
+
                     prompt = (
-                        f"Atue como Red Team Sênior. Analise este JSON do Nmap do alvo {target} e monte "
-                        f"um relatório gerencial em Markdown (PT-BR) contendo: 1. Resumo Executivo (Risco). "
-                        f"2. Portas e Serviços mapeados. 3. Vulnerabilidades Críticas. 4. Mitigações "
-                        f"recomendadas. JSON: {json.dumps(scan_data)}"
+                        f"Você é um consultor de segurança ofensiva sênior (OSCP/Red Team) redigindo um "
+                        f"relatório executivo formal para a diretoria e para a equipe técnica de um cliente "
+                        f"corporativo. Idioma: Português do Brasil. Formato: Markdown, tom profissional, "
+                        f"objetivo e sem sensacionalismo.\n\n"
+                        f"ALVO AUDITADO: {target}\n"
+                        f"CVEs DETECTADAS PELO SCANNER (use APENAS estas, não invente outras): {lista_cves}\n\n"
+                        f"Estruture EXATAMENTE nesta ordem, usando cabeçalhos '##':\n"
+                        f"## 1. Sumário Executivo\n"
+                        f"- Classifique o risco geral do alvo como CRÍTICO, ALTO, MÉDIO ou BAIXO e justifique "
+                        f"em 2-3 frases voltadas ao impacto de negócio (exposição, continuidade, dados).\n"
+                        f"## 2. Superfície de Ataque\n"
+                        f"- Liste em bullets cada porta/serviço/versão exposto e o que ele representa em risco.\n"
+                        f"## 3. Análise de Vulnerabilidades\n"
+                        f"- Para cada CVE relevante: cite o identificador em TEXTO PURO (ex.: CVE-2011-3192, "
+                        f"sem criar hyperlink), a severidade/CVSS quando houver, uma descrição técnica curta, "
+                        f"o vetor de exploração e o impacto potencial.\n"
+                        f"## 4. Plano de Remediação Priorizado\n"
+                        f"- Ações concretas em ordem de prioridade, com esforço estimado (Baixo/Médio/Alto) e "
+                        f"prazo sugerido (Imediato / 30 dias / 90 dias).\n"
+                        f"## 5. Observações e Limitações\n"
+                        f"- Ressalvas do scan (ex.: detecção sem autenticação, possíveis falsos positivos).\n\n"
+                        f"REGRAS: não use tabelas Markdown (use listas com marcadores e rótulos em **negrito**). "
+                        f"Não invente CVEs fora da lista fornecida. Seja técnico e direto.\n\n"
+                        f"DADOS BRUTOS DO NMAP (JSON): {json.dumps(scan_data)}"
                     )
                     ai_analysis = exec_chat_with_oracle(prompt, username)
-                    resultado_final = f"🛡️ **Nmap scan report para {target}:**\n\n{ai_analysis}\n\n[BOTÃO_DOWNLOAD:{scan_id}]"
-                    result_payload = {"scan_data": scan_data, "ai_analysis": ai_analysis}
+
+                    # Bloco de referências construído pelo código: garante que as CVEs
+                    # apareçam mesmo que a IA esqueça alguma. Os IDs em texto puro são
+                    # transformados em links clicáveis no chat e no relatório (via render).
+                    report_md = ai_analysis
+                    if cves:
+                        linhas = "\n".join(
+                            f"- {cve}" + (f"  —  CVSS {score}" if score else "")
+                            for cve, score in cves
+                        )
+                        report_md += f"\n\n## 6. Referências (CVEs Identificadas)\n{linhas}"
+
+                    resultado_final = f"🛡️ **Nmap scan report para {target}:**\n\n{report_md}\n\n[BOTÃO_DOWNLOAD:{scan_id}]"
+                    result_payload = {"scan_data": scan_data, "ai_analysis": report_md}
                     final_status = "finished"
                 else:
                     resultado_final = f"🛡️ **Nmap scan report:**\nNenhum host ativo detectado em `{target}`."

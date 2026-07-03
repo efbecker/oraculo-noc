@@ -138,6 +138,7 @@
         function formatMarkdown(text) {
             let html = text
                 .replace(/```markdown|```json|```/g, "")
+                .replace(/\bCVE-\d{4}-\d{4,7}\b/g, m => `<a href="https://nvd.nist.gov/vuln/detail/${m}" target="_blank" rel="noopener" style="color:#ff6b6b; font-weight:bold; text-decoration:underline;">${m}</a>`)
                 .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
                 .replace(/### (.*?)\n/g, "<h3 style='color:#00e5ff; margin:10px 0 5px 0;'>$1</h3>")
                 .replace(/## (.*?)\n/g, "<h2 style='color:#00e5ff; margin:15px 0 5px 0;'>$1</h2>")
