@@ -187,9 +187,13 @@
                             const pctEl = document.getElementById(`stage-pct-${scanId}`); if (pctEl) pctEl.innerText = `${pct}%`;
                             const barEl = document.getElementById(`bar-${scanId}`); if (barEl) barEl.style.width = `${pct}%`;
                         } else {
+                            // Scan saiu da lista de 'running' => terminou.
                             const barEl = document.getElementById(`bar-${scanId}`); if (barEl) { barEl.style.width = `100%`; barEl.style.background = `#3fb950`; }
                             delete activeScans[scanId];
-                            loadHistory(); 
+                            loadHistory();
+                            // Segurança extra: recarrega de novo logo depois, caso a
+                            // gravação do relatório no banco tenha acabado de acontecer.
+                            setTimeout(loadHistory, 1500);
                         }
                     }
                 } catch (e) { console.error("Erro no Radar", e); }
@@ -258,7 +262,9 @@
                     appendMessage('bot', `❌ Erro do servidor: ${data.error}`);
                 } else {
                     if (data.action === 'scan') {
-                        // Ativa o Scan Widget Original!
+                        // Mostra já a confirmação textual ("SecOps Ativado!")...
+                        if (data.reply) appendMessage('bot', data.reply, data.is_html, data.timestamp);
+                        // ...e ativa o Scan Widget com a barra de progresso.
                         activeScans[data.scan_id] = { target: data.target, stage: "Iniciando Nmap...", progress: 0 };
                         createScanWidget(data.scan_id, data.target, "Iniciando Nmap...", 0);
                         startRadar(); 

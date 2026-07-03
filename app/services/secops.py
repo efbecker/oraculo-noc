@@ -7,14 +7,31 @@ import tempfile
 import os
 import re
 import json
+import time
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from config import DB_PATH
 
 logger = logging.getLogger('Oraculo')
 
+# ==========================================================================
+# FAIXAS DE PROGRESSO POR FASE (piso, teto)
+# --------------------------------------------------------------------------
+# Garantem que a barra SEMPRE avance conforme a fase muda, mesmo quando o
+# Nmap não emite a linha "About X% done" (o que acontece muito na fase de
+# scripts de vulnerabilidade / NSE, que costuma ser a mais demorada).
+# ==========================================================================
+PHASES = {
+    "Inicializando...":    (1, 5),
+    "Conectividade":       (5, 12),
+    "Varredura TCP":       (12, 50),
+    "Análise de Serviços": (50, 62),
+    "Detecção de SO":      (62, 68),
+    "Vulnerabilidades":    (68, 92),
+}
+
 def init_scan_db():
-    with sqlite3.connect(DB_PATH) as conn:
+    with sqlite3.connect(DB_PATH, timeout=15) as conn:
         conn.execute('''
             CREATE TABLE IF NOT EXISTS scans (
                 id TEXT PRIMARY KEY,
@@ -25,6 +42,13 @@ def init_scan_db():
                 result_json TEXT
             )
         ''')
+        # WAL + busy_timeout reduzem drasticamente os erros "database is locked"
+        # quando o thread do scan e as requisições web tocam o SQLite ao mesmo tempo.
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=15000")
+        except Exception:
+            pass
 init_scan_db()
 
 def parse_nmap_xml_file(file_path):
@@ -43,94 +67,192 @@ def parse_nmap_xml_file(file_path):
                 ports.append({"id": f"{port_id}/{proto}", "service": svc_name, "version": version, "vulns": vulns})
             hosts.append({"ip": ip, "ports": ports})
         return hosts
-    except Exception: return []
+    except Exception:
+        return []
 
 def update_scan_progress(scan_id, progress, stage, status="running", result_json=None):
     try:
-        with sqlite3.connect(DB_PATH, timeout=15) as conn:
-            if result_json:
-                conn.execute("UPDATE scans SET progress=?, stage=?, status=?, result_json=? WHERE id=?", (progress, stage, status, json.dumps(result_json), scan_id))
+        with sqlite3.connect(DB_PATH, timeout=20) as conn:
+            conn.execute("PRAGMA busy_timeout=15000")
+            if result_json is not None:
+                conn.execute(
+                    "UPDATE scans SET progress=?, stage=?, status=?, result_json=? WHERE id=?",
+                    (progress, stage, status, json.dumps(result_json), scan_id)
+                )
             else:
-                conn.execute("UPDATE scans SET progress=?, stage=?, status=? WHERE id=?", (progress, stage, status, scan_id))
+                conn.execute(
+                    "UPDATE scans SET progress=?, stage=?, status=? WHERE id=?",
+                    (progress, stage, status, scan_id)
+                )
             conn.commit()
     except Exception as e:
-        pass
+        # Antes era 'pass' silencioso: um lock aqui derrubava a barra sem deixar rastro.
+        logger.warning(f"[SecOps] Falha ao atualizar progresso do scan {scan_id}: {e}")
 
 def start_scan_thread(target, username, tts_enabled=False):
     scan_id = str(uuid.uuid4())
-    
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute("INSERT INTO scans (id, target, progress, stage, status) VALUES (?, ?, 0, 'Inicializando...', 'running')", (scan_id, target))
-    
+
+    with sqlite3.connect(DB_PATH, timeout=20) as conn:
+        conn.execute("PRAGMA busy_timeout=15000")
+        conn.execute(
+            "INSERT INTO scans (id, target, progress, stage, status) VALUES (?, ?, 0, 'Inicializando...', 'running')",
+            (scan_id, target)
+        )
+        conn.commit()
+
     def run_scan():
         from app.services.ai_engine import exec_chat_with_oracle
-        
+
         logger.info(f"[SecOps] Varredura Progressiva em {target}")
-        with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as temp_xml: 
+
+        # ----- Estado de progresso compartilhado (thread-safe) -----
+        lock = threading.Lock()
+        state = {"progress": 1.0, "stage": "Inicializando...", "ceiling": 5.0}
+        stop_event = threading.Event()
+
+        def push(raw_pct=None, stage=None):
+            """Atualiza o progresso de forma MONOTÔNICA (nunca volta atrás) e
+            escala o '% da fase' do Nmap dentro da faixa [piso, teto] da fase atual."""
+            with lock:
+                if stage and stage in PHASES:
+                    floor, ceil = PHASES[stage]
+                    state["stage"] = stage
+                    state["ceiling"] = ceil
+                    if state["progress"] < floor:
+                        state["progress"] = floor
+                floor, ceil = PHASES.get(state["stage"], (state["progress"], state["ceiling"]))
+                if raw_pct is not None:
+                    scaled = floor + (max(0.0, min(100.0, raw_pct)) / 100.0) * (ceil - floor)
+                    if scaled > state["progress"]:
+                        state["progress"] = min(scaled, ceil)
+                p, s = round(state["progress"], 1), state["stage"]
+            update_scan_progress(scan_id, p, s)
+
+        def heartbeat():
+            """Faz a barra 'respirar': avança devagar rumo ao teto da fase para
+            nunca parecer travada em fases longas (ex.: scripts de vuln/NSE),
+            mesmo que o Nmap fique minutos sem imprimir '% done'."""
+            while not stop_event.wait(4):
+                with lock:
+                    gap = state["ceiling"] - state["progress"]
+                    if gap > 0.5:
+                        state["progress"] += max(0.3, gap * 0.06)
+                        p, s = round(state["progress"], 1), state["stage"]
+                    else:
+                        p = None
+                if p is not None:
+                    update_scan_progress(scan_id, p, s)
+
+        hb = threading.Thread(target=heartbeat, daemon=True)
+        hb.start()
+
+        with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as temp_xml:
             xml_path = temp_xml.name
-            
-        # NMAP COMANDO FORÇADO: A flag --packet-trace e -v forçam o output contínuo a evitar que o buffer empanque!
-        comando = ["nmap", "-Pn", "-A", "--script", "vuln,smb-os-discovery,http-title", "-T4", "--stats-every", "2s", "-v", "-oX", xml_path, target]
-        
+
+        # --stats-every + -v forçam o Nmap a emitir status periódico.
+        comando = ["nmap", "-Pn", "-A", "--script", "vuln,smb-os-discovery,http-title",
+                   "-T4", "--stats-every", "2s", "-v", "-oX", xml_path, target]
+
         resultado_final = ""
-        last_progress, last_stage = 0, "Inicializando..."
-        
+        final_status = "error"
+        result_payload = None
+
         try:
-            # bufsize=1 e universal_newlines=True obrigam o subprocess a não guardar os dados
-            process = subprocess.Popen(comando, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, bufsize=1)
-            
+            process = subprocess.Popen(
+                comando, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                universal_newlines=True, bufsize=1
+            )
+
             while True:
                 line = process.stdout.readline()
-                if not line and process.poll() is not None: break
-                if line:
-                    line = line.strip(); stage = None
-                    if "Ping Scan" in line: stage = "Conectividade"
-                    elif "Syn" in line or "Connect" in line or "Initiating SYN" in line: stage = "Varredura TCP"
-                    elif "Service scan" in line or "Initiating Service" in line: stage = "Análise de Serviços"
-                    elif "NSE" in line or "NSE:" in line: stage = "Vulnerabilidades"
-                    elif "OS detection" in line: stage = "Detecção de SO"
-                    
-                    progress = None
-                    # Regex mais robusta para apanhar "About 35.5% done" ou "About 35%" 
-                    match = re.search(r"About\s+(\d+(?:\.\d+)?)%", line)
-                    if match: progress = float(match.group(1))
-                    
-                    if (stage and stage != last_stage) or (progress and progress != last_progress):
-                        last_stage = stage if stage else last_stage
-                        last_progress = progress if progress else last_progress
-                        update_scan_progress(scan_id, last_progress, last_stage)
+                if not line and process.poll() is not None:
+                    break
+                if not line:
+                    continue
+                line = line.strip()
 
-            if process.wait() == 0 or os.path.exists(xml_path):
+                stage = None
+                if "Ping Scan" in line:
+                    stage = "Conectividade"
+                elif "SYN Stealth" in line or "Connect Scan" in line or "Initiating SYN" in line or "Initiating Connect" in line:
+                    stage = "Varredura TCP"
+                elif "Service scan" in line or "Initiating Service" in line:
+                    stage = "Análise de Serviços"
+                elif "OS detection" in line or "Initiating OS" in line:
+                    stage = "Detecção de SO"
+                elif "NSE" in line or "Script scan" in line or "Script Scan" in line:
+                    stage = "Vulnerabilidades"
+
+                raw_pct = None
+                m = re.search(r"About\s+(\d+(?:\.\d+)?)%", line)
+                if m:
+                    raw_pct = float(m.group(1))
+
+                if stage or raw_pct is not None:
+                    push(raw_pct=raw_pct, stage=stage)
+
+            process.wait()
+
+            if os.path.exists(xml_path) and os.path.getsize(xml_path) > 0:
+                push(stage="Vulnerabilidades", raw_pct=100)  # empurra para o teto da última fase
                 update_scan_progress(scan_id, 95, "Gerando relatório IA...")
                 scan_data = parse_nmap_xml_file(xml_path)
-                
-                if scan_data:
-                    prompt = f"Atue como Red Team Sênior. Analise este JSON do Nmap do alvo {target} e monte um relatório gerencial em Markdown (PT-BR) contendo: 1. Resumo Executivo (Risco). 2. Portas e Serviços mapeados. 3. Vulnerabilidades Críticas. 4. Mitigações recomendadas. JSON: {json.dumps(scan_data)}"
-                    ai_analysis = exec_chat_with_oracle(prompt, username)
-                    
-                    resultado_final = f"🛡️ **Nmap scan report para {target}:**\n\n{ai_analysis}\n\n[BOTÃO_DOWNLOAD:{scan_id}]"
-                    update_scan_progress(scan_id, 100, "Concluído", "finished", {"scan_data": scan_data, "ai_analysis": ai_analysis})
-                else:
-                    resultado_final = f"🛡️ **Nmap scan report:**\nNenhum Host Ativo Detectado."
-                    update_scan_progress(scan_id, 100, "Concluído", "error")
-            else:
-                 resultado_final = f"🛡️ **Nmap scan report:**\nFalha ao executar o comando."
-                 update_scan_progress(scan_id, 100, "Concluído", "error")
-                 
-        except Exception as e:
-            resultado_final = f"🛡️ **Nmap scan report:**\nErro crítico: {str(e)}"
-            update_scan_progress(scan_id, 100, "Concluído", "error")
-        
-        finally:
-            if os.path.exists(xml_path): os.remove(xml_path)
 
+                if scan_data:
+                    prompt = (
+                        f"Atue como Red Team Sênior. Analise este JSON do Nmap do alvo {target} e monte "
+                        f"um relatório gerencial em Markdown (PT-BR) contendo: 1. Resumo Executivo (Risco). "
+                        f"2. Portas e Serviços mapeados. 3. Vulnerabilidades Críticas. 4. Mitigações "
+                        f"recomendadas. JSON: {json.dumps(scan_data)}"
+                    )
+                    ai_analysis = exec_chat_with_oracle(prompt, username)
+                    resultado_final = f"🛡️ **Nmap scan report para {target}:**\n\n{ai_analysis}\n\n[BOTÃO_DOWNLOAD:{scan_id}]"
+                    result_payload = {"scan_data": scan_data, "ai_analysis": ai_analysis}
+                    final_status = "finished"
+                else:
+                    resultado_final = f"🛡️ **Nmap scan report:**\nNenhum host ativo detectado em `{target}`."
+                    final_status = "error"
+            else:
+                resultado_final = "🛡️ **Nmap scan report:**\nFalha ao executar a varredura (o Nmap não retornou resultado)."
+                final_status = "error"
+
+        except FileNotFoundError:
+            resultado_final = "🛡️ **Nmap scan report:**\nErro: o binário `nmap` não foi encontrado no servidor."
+            final_status = "error"
+        except Exception as e:
+            logger.error(f"[SecOps] Erro no scan {scan_id}: {e}")
+            resultado_final = f"🛡️ **Nmap scan report:**\nErro crítico: {str(e)}"
+            final_status = "error"
+        finally:
+            # Para o heartbeat ANTES de gravar o estado final; senão ele poderia
+            # sobrescrever o status 'finished' de volta para 'running'.
+            stop_event.set()
+            hb.join(timeout=6)
+            if os.path.exists(xml_path):
+                try:
+                    os.remove(xml_path)
+                except Exception:
+                    pass
+
+        # ================== ENTREGA NO CHAT (A ORDEM IMPORTA) ==================
+        # 1) Primeiro grava a mensagem no histórico do usuário.
         now_str = datetime.now().strftime("%d/%m/%Y %H:%M")
         try:
             with sqlite3.connect(DB_PATH, timeout=20) as conn:
-                conn.execute("INSERT INTO chat_history (username, sender, content, is_html, timestamp) VALUES (?, 'bot', ?, 0, ?)", 
-                             (username, resultado_final, now_str))
+                conn.execute("PRAGMA busy_timeout=15000")
+                conn.execute(
+                    "INSERT INTO chat_history (username, sender, content, is_html, timestamp) VALUES (?, 'bot', ?, 0, ?)",
+                    (username, resultado_final, now_str)
+                )
+                conn.commit()
         except Exception as e:
-            logger.error(f"[SecOps] Erro DB: {e}")
+            logger.error(f"[SecOps] Erro ao gravar relatório no chat: {e}")
 
-    threading.Thread(target=run_scan).start()
+        # 2) SÓ DEPOIS marca o scan como concluído (o que o remove de /api/active_scans).
+        #    Assim, quando o frontend perceber o fim e recarregar o histórico,
+        #    a mensagem JÁ estará garantidamente gravada. Isso elimina a corrida
+        #    que fazia o relatório "sumir" e nunca aparecer no chat.
+        update_scan_progress(scan_id, 100, "Concluído", final_status, result_payload)
+
+    threading.Thread(target=run_scan, daemon=True).start()
     return scan_id
