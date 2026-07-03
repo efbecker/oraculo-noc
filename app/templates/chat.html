@@ -8,7 +8,6 @@
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #0b1117; color: #e0e0e0; margin: 0; display: flex; height: 100vh; overflow: hidden; }
         
-        /* Barra Lateral (Sidebar) Clássica */
         .sidebar { width: 250px; background-color: #080c11; border-right: 1px solid #1f2933; display: flex; flex-direction: column; flex-shrink: 0; }
         .sidebar-header { padding: 25px 20px; font-size: 18px; font-weight: bold; letter-spacing: 1px; display: flex; align-items: center; gap: 10px; color: #fff; }
         .badge-noc { background: #00e5ff; color: #000; font-size: 10px; padding: 3px 6px; border-radius: 4px; font-weight: 800; }
@@ -17,10 +16,8 @@
         .icon-btn:hover { color: #00e5ff; }
         .sidebar-item { margin: 15px; background: #131c26; padding: 12px 15px; border-radius: 8px; color: #00e5ff; font-size: 14px; display: flex; align-items: center; gap: 10px; font-weight: 500; cursor: pointer; border-left: 3px solid #00e5ff; }
         
-        /* Área Central do Chat */
         .main-area { flex: 1; display: flex; flex-direction: column; position: relative; background-color: #0d131a; min-width: 0; }
         
-        /* Cabeçalho Superior Direito */
         .top-right-header { position: absolute; top: 20px; right: 25px; display: flex; gap: 10px; z-index: 10; flex-wrap: wrap; }
         .badge-info { background: #1f2933; padding: 6px 15px; border-radius: 6px; font-size: 12px; display: flex; align-items: center; gap: 8px; color: #aaa; border: 1px solid #2d3748; }
         .badge-admin { background: #1f2933; color: #00e5ff; text-decoration: none; padding: 6px 15px; border-radius: 6px; font-size: 12px; display: flex; align-items: center; gap: 8px; font-weight: bold; border: 1px solid #00e5ff; transition: 0.3s; }
@@ -28,15 +25,16 @@
         .badge-logout { background: transparent; border: none; color: #ff4d4d; cursor: pointer; padding: 6px 10px; font-size: 16px; transition: 0.3s; text-decoration: none; }
         .badge-logout:hover { color: #ff1a1a; transform: scale(1.1); }
         
-        /* Lista de Mensagens Centralizada e Compacta */
         .chat-messages { flex: 1; overflow-y: auto; padding: 80px 15% 20px 15%; display: flex; flex-direction: column; gap: 20px; }
         
-        /* Balões de Mensagem Originais */
         .msg-user { background: #1e293b; color: #fff; padding: 12px 20px; border-radius: 20px; max-width: 70%; align-self: flex-end; font-size: 14.5px; line-height: 1.5; border-bottom-right-radius: 4px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
         .msg-bot { border-left: 3px solid #00e5ff; padding-left: 20px; color: #cbd5e1; max-width: 85%; align-self: flex-start; font-size: 14.5px; line-height: 1.6; margin-bottom: 10px; }
         .msg-bot strong { color: #fff; }
         
-        /* Caixa de Entrada */
+        /* Estilo da Data e Hora */
+        .msg-time { display: block; font-size: 11px; color: rgba(255,255,255,0.4); text-align: right; margin-top: 6px; font-family: monospace; }
+        .msg-bot .msg-time { text-align: left; }
+        
         .input-wrapper { padding: 20px 15%; padding-bottom: 35px; background: transparent; }
         .input-box { background: #151e27; border: 1px solid #2d3748; border-radius: 30px; display: flex; align-items: center; padding: 5px 10px 5px 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); }
         .input-box input { flex: 1; background: transparent; border: none; color: #fff; padding: 12px 10px; outline: none; font-size: 14px; min-width: 0; }
@@ -54,16 +52,13 @@
         
         @keyframes pulsar-rec { from { opacity: 0.4; } to { opacity: 1; } }
 
-        /* RESPONSIVIDADE COMPLETA PARA CELULAR */
         @media (max-width: 768px) {
             body { flex-direction: column; }
             .sidebar { width: 100%; height: auto; border-right: none; border-bottom: 1px solid #1f2933; }
             .sidebar-header { padding: 15px; justify-content: center; }
             .sidebar-section, .sidebar-item { display: none; }
-            
             .top-right-header { position: relative; top: 0; right: 0; padding: 10px; background: #080c11; justify-content: center; width: 100%; box-sizing: border-box; gap: 8px; }
             .badge-info, .badge-admin { padding: 5px 10px; font-size: 11px; }
-            
             .chat-messages { padding: 20px 15px; }
             .msg-user { max-width: 85%; }
             .msg-bot { max-width: 100%; }
@@ -78,7 +73,12 @@
         </div>
         <div class="sidebar-section">
             <span><i class="fas fa-history" style="margin-right: 5px;"></i> Histórico</span>
-            <i class="fas fa-edit icon-btn" title="Limpar Histórico" onclick="clearHistory()"></i>
+            <div style="display: flex; gap: 15px;">
+                <!-- O NOVO CHAT (Sinal de +) APENAS LIMPA A TELA VISUALMENTE -->
+                <i class="fas fa-plus icon-btn" title="Nova Conversa (Limpar Tela)" onclick="document.getElementById('chatMessages').innerHTML = '';"></i>
+                <!-- A LIXEIRA APAGA O BANCO DE DADOS DE FATO -->
+                <i class="fas fa-trash icon-btn" title="Apagar Histórico Permanente" onclick="clearHistory()"></i>
+            </div>
         </div>
         <div class="sidebar-item">
             <i class="fas fa-calendar-day"></i> Hoje
@@ -88,11 +88,9 @@
     <div class="main-area">
         <div class="top-right-header">
             <div class="badge-info"><i class="fas fa-server"></i> {{ grupo_cliente }}</div>
-            
             {% if profile in ['ADMIN', 'ADMINISTRADOR'] %}
             <a href="/admin" class="badge-admin"><i class="fas fa-cog"></i> Admin</a>
             {% endif %}
-            
             <div class="badge-info" style="color: #fff;"><i class="fas fa-user-circle"></i> {{ username|upper }}</div>
             <a href="/logout" class="badge-logout" title="Sair"><i class="fas fa-power-off"></i></a>
         </div>
@@ -104,7 +102,6 @@
             <div class="input-box">
                 <button class="btn-icon" id="btnSpeaker" onclick="toggleTTS()" title="Ativar Resposta por Voz"><i class="fas fa-volume-up"></i></button>
                 <button class="btn-icon" id="btnMic" onclick="toggleSTT()" title="Falar ao Microfone"><i class="fas fa-microphone"></i></button>
-                
                 <input type="text" id="chatInput" placeholder="Pergunte ao Oráculo sobre infraestrutura ou secops..." onkeypress="if(event.key==='Enter') sendMessage()">
                 <button class="btn-send" onclick="sendMessage()"><i class="fas fa-arrow-up"></i></button>
             </div>
@@ -128,24 +125,13 @@
             recognition.lang = 'pt-BR';
             recognition.continuous = false;
             recognition.interimResults = false;
-
-            recognition.onstart = () => {
-                isRecording = true;
-                btnMic.classList.add('recording');
-            };
-
+            recognition.onstart = () => { isRecording = true; btnMic.classList.add('recording'); };
             recognition.onresult = (event) => {
-                const text = event.results[0][0].transcript;
-                chatInput.value = text;
-                // MÁGICA RESTAURADA: Envia na hora de forma automática!
+                chatInput.value = event.results[0][0].transcript;
                 sendMessage();
             };
-
             recognition.onerror = (e) => { console.error("Erro STT:", e); };
-            recognition.onend = () => {
-                isRecording = false;
-                btnMic.classList.remove('recording');
-            };
+            recognition.onend = () => { isRecording = false; btnMic.classList.remove('recording'); };
         }
 
         function toggleTTS() {
@@ -155,12 +141,8 @@
         }
 
         function toggleSTT() {
-            if (!recognition) {
-                alert("Reconhecimento de voz não suportado neste navegador.");
-                return;
-            }
-            if (isRecording) { recognition.stop(); } 
-            else { recognition.start(); }
+            if (!recognition) { alert("Reconhecimento de voz não suportado."); return; }
+            if (isRecording) { recognition.stop(); } else { recognition.start(); }
         }
 
         async function loadHistory() {
@@ -168,23 +150,27 @@
                 const response = await fetch('/api/chat/history');
                 const messages = await response.json();
                 chatMessages.innerHTML = '';
-                messages.forEach(msg => appendMessage(msg.sender === 'user' ? 'user' : 'bot', msg.content, msg.is_html));
+                messages.forEach(msg => appendMessage(msg.sender === 'user' ? 'user' : 'bot', msg.content, msg.is_html, msg.timestamp));
                 chatMessages.scrollTop = chatMessages.scrollHeight;
             } catch (e) { console.error("Erro ao carregar histórico", e); }
         }
 
         async function clearHistory() {
-            if(confirm("Deseja apagar todo o histórico de conversas?")) {
+            if(confirm("ATENÇÃO: Deseja apagar TODO o histórico de conversas permanentemente?")) {
                 await fetch('/api/chat/clear', { method: 'POST' });
                 chatMessages.innerHTML = '';
             }
         }
 
-        function appendMessage(sender, content, isHtml = false) {
+        // Função appendMessage atualizada para receber e injetar a data/hora
+        function appendMessage(sender, content, isHtml = false, timestamp = '') {
             const msgDiv = document.createElement('div');
             msgDiv.classList.add(sender === 'user' ? 'msg-user' : 'msg-bot');
-            if (isHtml) { msgDiv.innerHTML = content; } 
-            else { msgDiv.innerHTML = content.replace(/\n/g, '<br>'); }
+            
+            let htmlContent = isHtml ? content : content.replace(/\n/g, '<br>');
+            let timeHtml = timestamp ? `<span class="msg-time">${timestamp}</span>` : '';
+            
+            msgDiv.innerHTML = htmlContent + timeHtml;
             chatMessages.appendChild(msgDiv);
             chatMessages.scrollTop = chatMessages.scrollHeight;
         }
@@ -193,7 +179,11 @@
             const message = chatInput.value.trim();
             if (!message) return;
             chatInput.value = '';
-            appendMessage('user', message);
+            
+            // Gera um relógio temporário na tela enquanto envia pro servidor
+            const now = new Date();
+            const timeStr = now.toLocaleDateString('pt-BR') + ' ' + now.toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'});
+            appendMessage('user', message, false, timeStr);
             
             loading.style.display = 'block';
             chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -210,12 +200,12 @@
                 if(data.error) {
                     appendMessage('bot', `❌ Erro do servidor: ${data.error}`);
                 } else {
-                    appendMessage('bot', data.reply || "⚠️ Nenhuma resposta obtida da IA.", data.is_html);
+                    // Injeta a resposta com o Timestamp retornado pelo Python
+                    appendMessage('bot', data.reply || "⚠️ Nenhuma resposta...", data.is_html, data.timestamp);
                     
-                    // GATILHO DE ÁUDIO RESTAURADO: Toca o MP3 se o speaker estiver ativo
                     if (ttsEnabled && data.audio_path) {
                         const audio = new Audio(data.audio_path);
-                        audio.play().catch(err => console.error("Erro ao reproduzir áudio:", err));
+                        audio.play().catch(err => console.error("Erro áudio:", err));
                     }
                 }
             } catch (e) {

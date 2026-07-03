@@ -30,14 +30,29 @@ os.makedirs(STATIC_DIR, exist_ok=True)
 
 # A MÁGICA COMEÇA AQUI: Recebe a URL do cliente, se não tiver, usa a padrão
 def zabbix_api(method, params, token, url=None):
-    if not token: raise ValueError("Token do Zabbix não configurado para este usuário.")
+    if not token: raise ValueError("Token do Zabbix não configurado.")
     endpoint = url if url else ZABBIX_URL
-    headers = {'Content-Type': 'application/json-rpc'}
-    payload = {"jsonrpc": "2.0", "method": method, "params": params, "auth": token, "id": 1}
+    
+    # 1. Tenta a forma tradicional do Zabbix 7.0 (Bearer Header)
+    headers = {
+        'Content-Type': 'application/json-rpc',
+        'Authorization': f'Bearer {token}'
+    }
+    
+    # 2. Injeta o token como "auth" no payload (Compatibilidade garantida Nginx/Apache)
+    payload = {
+        "jsonrpc": "2.0", 
+        "method": method, 
+        "params": params, 
+        "auth": token, 
+        "id": 1
+    }
+    
+    import requests
     resposta = requests.post(endpoint, json=payload, headers=headers, timeout=45).json()
-    if 'error' in resposta: raise Exception(f"Erro na API Zabbix: {resposta['error'].get('data')}")
+    if 'error' in resposta: 
+        raise Exception(f"{resposta['error'].get('data')}")
     return resposta.get('result', [])
-
 def fetch_historical_data(items_list, hora_passada, hora_atual, dias, token, url=None):
     hist_by_item = {}
     if not items_list: return hist_by_item
