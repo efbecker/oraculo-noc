@@ -111,6 +111,19 @@ def update_scan_progress(scan_id, progress, stage, status="running", result_json
         logger.warning(f"[SecOps] Falha ao atualizar progresso do scan {scan_id}: {e}")
 
 def start_scan_thread(target, username, tts_enabled=False):
+    # --- Defesa em profundidade: reforça a regra admin-only na própria camada
+    #     do SecOps, independente de quem chamou. Fonte única da verdade em ai_engine. ---
+    try:
+        from app.services.ai_engine import perfil_pode_escanear, get_user_profile
+        perfil = get_user_profile(username)
+        if not perfil_pode_escanear(perfil):
+            logger.warning(f"[SecOps BLOCKED] start_scan_thread recusado para '{username}' (Perfil: {perfil}).")
+            return None
+    except Exception as e:
+        # Em caso de dúvida sobre a autorização, NÃO executa (fail-closed).
+        logger.error(f"[SecOps] Falha ao validar autorização de '{username}': {e}. Scan abortado.")
+        return None
+
     scan_id = str(uuid.uuid4())
 
     with sqlite3.connect(DB_PATH, timeout=20) as conn:

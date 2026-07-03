@@ -47,6 +47,18 @@ def get_user_profile(username):
             return str(row[0]).upper().strip() if (row and row[0]) else "CLIENTE"
     except: return "CLIENTE"
 
+# ==========================================================================
+# AUTORIZAÇÃO DE FERRAMENTAS OFENSIVAS (Nmap / SecOps)
+# --------------------------------------------------------------------------
+# Apenas ADMINISTRADOR pode disparar o scan profundo. A comparação é EXATA
+# (perfil normalizado), evitando falsos positivos de substring.
+# Para também liberar o NOC, basta adicionar "NOC" ao conjunto abaixo.
+# ==========================================================================
+PERFIS_AUTORIZADOS_SCAN = {"ADMIN", "ADMINISTRADOR", "NOC"}
+
+def perfil_pode_escanear(perfil):
+    return str(perfil).upper().strip() in PERFIS_AUTORIZADOS_SCAN
+
 def get_user_zabbix_url(username):
     try:
         with sqlite3.connect(DB_PATH, timeout=15) as conn:
@@ -130,12 +142,16 @@ def process_oraculo_message(message, username, token_zabbix, grupo_cliente, tts_
         
         return {"reply": reply, "audio_path": None, "is_html": 1}
 
-    # SecOps - Nmap Scan
+    # SecOps - Nmap Scan (APENAS ADMINISTRADOR)
     if any(p in msg_l for p in ['scan', 'nmap', 'secops', 'vulnerabilidade']):
         perfil = get_user_profile(username)
-        if not any(p in perfil for p in ["ADMIN", "ADMINISTRADOR", "NOC"]):
-            logger.warning(f"[SecOps BLOCKED] Tentativa de scan NEGADA. Usuário '{username}' (Perfil: {perfil}) tentou acionar ferramentas de segurança.")
-            return {"reply": "🛡️ Acesso negado a ferramentas de segurança.", "audio_path": None}
+        if not perfil_pode_escanear(perfil):
+            logger.warning(f"[SecOps BLOCKED] Scan NEGADO. Usuário '{username}' (Perfil: {perfil}) tentou acionar ferramenta ofensiva.")
+            return {
+                "reply": "🛡️ **Acesso negado.**\nA varredura de segurança (Nmap) é uma ferramenta ofensiva restrita a **administradores**. Seu perfil não tem permissão para executá-la.",
+                "audio_path": None,
+                "is_html": 0
+            }
             
         ip_match = re.search(r'\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}|\b(?:\d{1,3}\.){3}\d{1,3}\b', msg_l)
         target = ip_match.group(0) if ip_match else "127.0.0.1"
@@ -144,6 +160,12 @@ def process_oraculo_message(message, username, token_zabbix, grupo_cliente, tts_
         logger.warning(f"[SecOps AUDIT] 🚨 Usuário '{username}' (Perfil: {perfil}) INICIOU scan profundo no alvo: {target}.")
         
         scan_id = start_scan_thread(target, username, tts_enabled)
+        if not scan_id:
+            return {
+                "reply": "🛡️ **Acesso negado.**\nA varredura de segurança (Nmap) é restrita a **administradores**.",
+                "audio_path": None,
+                "is_html": 0
+            }
         msg_reply = f"🛡️ **SecOps Ativado!**\nIniciando scan profundo no alvo: `{target}`.\n\n*O processo está rodando em background. Assim que o scan terminar, o relatório será gerado automaticamente aqui no chat.*"
         
         return {"reply": msg_reply, "action": "scan", "target": target, "scan_id": scan_id, "is_html": 0}
