@@ -16,3 +16,20 @@
 03/07/2026 15:06:11 | INFO | Serving on http://0.0.0.0:5000
 03/07/2026 15:06:26 | WARNING | [SecOps AUDIT] 🚨 Usuário 'armazem' (Perfil: ADMINISTRADOR) INICIOU scan profundo no alvo: apl03.excia.com.br.
 03/07/2026 16:06:57 | INFO | Serving on http://0.0.0.0:5000
+03/07/2026 16:33:26 | INFO | Serving on http://0.0.0.0:5000
+03/07/2026 16:34:01 | WARNING | [SecOps AUDIT] 🚨 Usuário 'armazem' (Perfil: ADMINISTRADOR) INICIOU scan profundo no alvo: apl03.excia.com.br.
+03/07/2026 16:34:01 | INFO | [SecOps] Iniciando varredura otimizada em apl03.excia.com.br para o user armazem
+03/07/2026 16:36:30 | INFO | [SecOps] Relatório gerado e injetado com sucesso para armazem.
+03/07/2026 16:45:50 | INFO | Serving on http://0.0.0.0:5000
+03/07/2026 16:46:00 | INFO | Serving on http://0.0.0.0:5000
+03/07/2026 16:49:19 | INFO | Serving on http://0.0.0.0:5000
+03/07/2026 16:49:26 | WARNING | [SecOps AUDIT] 🚨 Usuário 'armazem' (Perfil: ADMINISTRADOR) INICIOU scan profundo no alvo: apl03.excia.com.br.
+03/07/2026 16:49:26 | INFO | [SecOps] Iniciando varredura em apl03.excia.com.br para o user armazem
+03/07/2026 16:53:45 | INFO | [SecOps] Nmap terminou. Enviando para IA Red Team Oracle...
+03/07/2026 16:53:56 | INFO | [SecOps] Relatório gerado e injetado com sucesso para armazem.
+03/07/2026 16:56:42 | INFO | Serving on http://0.0.0.0:5000
+03/07/2026 16:56:54 | WARNING | [SecOps AUDIT] 🚨 Usuário 'armazem' (Perfil: ADMINISTRADOR) INICIOU scan profundo no alvo: apl02.excia.com.br.
+03/07/2026 16:56:54 | INFO | [SecOps] Iniciando varredura em apl02.excia.com.br para o user armazem
+03/07/2026 16:58:43 | INFO | Serving on http://0.0.0.0:5000
+03/07/2026 16:59:15 | WARNING | [SecOps AUDIT] 🚨 Usuário 'armazem' (Perfil: ADMINISTRADOR) INICIOU scan profundo no alvo: apl02.excia.com.br.
+03/07/2026 16:59:15 | INFO | [SecOps] Varredura Progressiva em apl02.excia.com.br
