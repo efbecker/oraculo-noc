@@ -2,10 +2,10 @@ import os
 import re
 import json
 import sqlite3
+import logging
 import oci
 from datetime import datetime
 from config import OCI_ENDPOINT, OCI_COMPARTMENT_ID, DB_PATH
-# Importamos o start_scan_thread sem puxar funções TTS quebradas
 from app.services.secops import start_scan_thread
 from app.services.zabbix import (
     consultar_status_host_zabbix,
@@ -13,6 +13,21 @@ from app.services.zabbix import (
     gerar_grafico_zabbix,
     gerar_relatorio_consumo_todos
 )
+
+# ==========================================
+# CONFIGURAÇÃO DO SISTEMA DE LOGS / AUDITORIA
+# ==========================================
+LOG_DIR = '/opt/oraculo-noc/logs'
+if not os.path.exists(LOG_DIR):
+    os.makedirs(LOG_DIR)
+
+logging.basicConfig(
+    filename=os.path.join(LOG_DIR, 'oraculo_secops.log'),
+    level=logging.INFO,
+    format='%(asctime)s | %(levelname)s | %(message)s',
+    datefmt='%d/%m/%Y %H:%M:%S'
+)
+logger = logging.getLogger('Oraculo')
 
 def get_user_model(username):
     try:
@@ -43,7 +58,7 @@ def get_user_zabbix_url(username):
 
 def obter_contexto_zabbix_real_time(token, grupo, url=None):
     if not token or token.strip() == "":
-        return "ERRO_ZABBIX: Token da API não configurado no Painel Admin."
+        return "ERRO_ZABBIX: Token da API não configurado."
     try:
         status = consultar_status_host_zabbix("", token, grupo, url)
         if status and "Erro de comunicação" in status:
@@ -86,6 +101,7 @@ def exec_chat_with_oracle(prompt, username="admin", context="", chat_history_row
         resp = client.chat(details)
         return resp.data.chat_response.text
     except Exception as e:
+        logger.error(f"[IA Oracle] Erro para o usuário '{username}': {str(e)}")
         return f"⚠️ **Falha de IA (Oracle OCI):**\nO Zabbix enviou os dados, mas a IA recusou a conexão.\nErro: `{str(e)}`"
 
 def process_oraculo_message(message, username, token_zabbix, grupo_cliente, tts_enabled=False, history_rows=None, zabbix_url=None):
@@ -102,6 +118,8 @@ def process_oraculo_message(message, username, token_zabbix, grupo_cliente, tts_
         target_match = re.search(r'(?:do|da|servidor|vm|host)\s+([a-zA-Z0-9_-]+)', msg_l)
         if target_match: target = target_match.group(1)
         
+        logger.info(f"[Relatório] Usuário '{username}' solicitou relatório FinOps/Consumo para alvo: {target} ({dias} dias).")
+        
         if target == "TODOS": reply = gerar_relatorio_consumo_todos(dias, token_zabbix, grupo_cliente, zabbix_url)
         else:
             metrica = "CPU"
@@ -115,25 +133,31 @@ def process_oraculo_message(message, username, token_zabbix, grupo_cliente, tts_
     # SecOps - Nmap Scan
     if any(p in msg_l for p in ['scan', 'nmap', 'secops', 'vulnerabilidade']):
         perfil = get_user_profile(username)
-        # Verifica se o utilizador tem permissão Global ou NOC/Admin
-        if "ADMIN" not in perfil and "NOC" not in perfil and grupo_cliente != "GLOBAL":
+        if not any(p in perfil for p in ["ADMIN", "ADMINISTRADOR", "NOC"]):
+            logger.warning(f"[SecOps BLOCKED] Tentativa de scan NEGADA. Usuário '{username}' (Perfil: {perfil}) tentou acionar ferramentas de segurança.")
             return {"reply": "🛡️ Acesso negado a ferramentas de segurança.", "audio_path": None}
             
-        ip_match = re.search(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', msg_l)
+        ip_match = re.search(r'\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}|\b(?:\d{1,3}\.){3}\d{1,3}\b', msg_l)
         target = ip_match.group(0) if ip_match else "127.0.0.1"
         
-        # Inicia o scan sem tentar criar áudio imediatamente (evita o erro)
+        # LOG CRÍTICO DE AUDITORIA
+        logger.warning(f"[SecOps AUDIT] 🚨 Usuário '{username}' (Perfil: {perfil}) INICIOU scan profundo no alvo: {target}.")
+        
         scan_id = start_scan_thread(target, username, tts_enabled)
-        return {"action": "scan", "target": target, "scan_id": scan_id}
+        msg_reply = f"🛡️ **SecOps Ativado!**\nIniciando scan profundo no alvo: `{target}`.\n\n*O processo está rodando em background. Assim que o scan terminar, o relatório será gerado automaticamente aqui no chat.*"
+        
+        return {"reply": msg_reply, "action": "scan", "target": target, "scan_id": scan_id, "is_html": 0}
 
     # IA Oracle
     context = obter_contexto_zabbix_real_time(token_zabbix, grupo_cliente, zabbix_url)
     if "ERRO_ZABBIX" in context:
+        logger.error(f"[Zabbix] Falha de comunicação para o usuário '{username}': {context}")
         return {
             "reply": f"🚨 **Não consegui conectar ao Zabbix!**\n\nMotivo:\n`{context}`", 
             "audio_path": None, 
             "is_html": 0
         }
 
+    logger.info(f"[IA Oracle] Usuário '{username}' iniciou interação livre com o modelo.")
     reply = exec_chat_with_oracle(message, username=username, context=context, chat_history_rows=history_rows)
     return {"reply": reply, "audio_path": None}
