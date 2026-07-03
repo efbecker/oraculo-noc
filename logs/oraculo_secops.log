@@ -35,3 +35,6 @@
 03/07/2026 16:59:15 | INFO | [SecOps] Varredura Progressiva em apl02.excia.com.br
 03/07/2026 17:00:31 | WARNING | [SecOps AUDIT] 🚨 Usuário 'armazem' (Perfil: ADMINISTRADOR) INICIOU scan profundo no alvo: apl02.excia.com.br.
 03/07/2026 17:00:31 | INFO | [SecOps] Varredura Progressiva em apl02.excia.com.br
+03/07/2026 17:05:08 | INFO | Serving on http://0.0.0.0:5000
+03/07/2026 17:06:04 | WARNING | [SecOps AUDIT] 🚨 Usuário 'armazem' (Perfil: ADMINISTRADOR) INICIOU scan profundo no alvo: apl03.excia.com.br.
+03/07/2026 17:06:04 | INFO | [SecOps] Varredura Progressiva em apl03.excia.com.br

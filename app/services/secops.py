@@ -69,13 +69,15 @@ def start_scan_thread(target, username, tts_enabled=False):
         with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as temp_xml: 
             xml_path = temp_xml.name
             
-        comando = ["nmap", "-Pn", "-A", "--script", "vuln,smb-os-discovery,http-title", "-T4", "--stats-every", "1s", "-oX", xml_path, target]
+        # NMAP COMANDO FORÇADO: A flag --packet-trace e -v forçam o output contínuo a evitar que o buffer empanque!
+        comando = ["nmap", "-Pn", "-A", "--script", "vuln,smb-os-discovery,http-title", "-T4", "--stats-every", "2s", "-v", "-oX", xml_path, target]
         
         resultado_final = ""
         last_progress, last_stage = 0, "Inicializando..."
         
         try:
-            process = subprocess.Popen(comando, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+            # bufsize=1 e universal_newlines=True obrigam o subprocess a não guardar os dados
+            process = subprocess.Popen(comando, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, bufsize=1)
             
             while True:
                 line = process.stdout.readline()
@@ -83,12 +85,14 @@ def start_scan_thread(target, username, tts_enabled=False):
                 if line:
                     line = line.strip(); stage = None
                     if "Ping Scan" in line: stage = "Conectividade"
-                    elif "Syn" in line or "Connect" in line: stage = "Varredura TCP"
-                    elif "Service scan" in line: stage = "Análise de Serviços"
-                    elif "NSE" in line: stage = "Vulnerabilidades"
+                    elif "Syn" in line or "Connect" in line or "Initiating SYN" in line: stage = "Varredura TCP"
+                    elif "Service scan" in line or "Initiating Service" in line: stage = "Análise de Serviços"
+                    elif "NSE" in line or "NSE:" in line: stage = "Vulnerabilidades"
+                    elif "OS detection" in line: stage = "Detecção de SO"
                     
                     progress = None
-                    match = re.search(r"About\s+(\d+(\.\d+)?)%", line)
+                    # Regex mais robusta para apanhar "About 35.5% done" ou "About 35%" 
+                    match = re.search(r"About\s+(\d+(?:\.\d+)?)%", line)
                     if match: progress = float(match.group(1))
                     
                     if (stage and stage != last_stage) or (progress and progress != last_progress):
@@ -104,7 +108,6 @@ def start_scan_thread(target, username, tts_enabled=False):
                     prompt = f"Atue como Red Team Sênior. Analise este JSON do Nmap do alvo {target} e monte um relatório gerencial em Markdown (PT-BR) contendo: 1. Resumo Executivo (Risco). 2. Portas e Serviços mapeados. 3. Vulnerabilidades Críticas. 4. Mitigações recomendadas. JSON: {json.dumps(scan_data)}"
                     ai_analysis = exec_chat_with_oracle(prompt, username)
                     
-                    # A MÁGICA DO BOTÃO AQUI
                     resultado_final = f"🛡️ **Nmap scan report para {target}:**\n\n{ai_analysis}\n\n[BOTÃO_DOWNLOAD:{scan_id}]"
                     update_scan_progress(scan_id, 100, "Concluído", "finished", {"scan_data": scan_data, "ai_analysis": ai_analysis})
                 else:
