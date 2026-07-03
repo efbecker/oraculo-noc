@@ -6,6 +6,14 @@ from config import DB_PATH
 
 bp = Blueprint('auth', __name__)
 
+def _is_hashed(pw):
+    """Detecta se a senha armazenada já é um hash do Werkzeug
+    (scrypt, pbkdf2 ou argon2) em vez de texto puro."""
+    if not isinstance(pw, str) or "$" not in pw:
+        return False
+    metodo = pw.split("$", 1)[0].split(":", 1)[0].lower()
+    return metodo in ("pbkdf2", "scrypt", "argon2", "argon2id")
+
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -31,9 +39,30 @@ def login():
                 # 1. CORREÇÃO: Buscando as colunas REAIS do banco novo Multi-Tenant
                 c.execute("SELECT id, password, profile, token_zabbix, grupo_cliente, zabbix_url, ai_model FROM users WHERE username=?", (username,))
                 user = c.fetchone()
-                
-                # 2. CORREÇÃO: Aceita a senha em texto puro (script) ou em Hash (segurança)
-                if user and (user[1] == password or (user[1].startswith('pbkdf2:') and check_password_hash(user[1], password))):
+
+                auth_ok = False
+                if user and password:
+                    stored = user[1] or ""
+                    if _is_hashed(stored):
+                        # Senha já protegida: verificação criptográfica (scrypt/pbkdf2/argon2).
+                        try:
+                            auth_ok = check_password_hash(stored, password)
+                        except Exception:
+                            auth_ok = False
+                    else:
+                        # LEGADO em texto puro: valida uma única vez e migra para hash
+                        # imediatamente, para não trancar ninguém durante a transição.
+                        # >>> Depois de migrar toda a base, este 'else' pode ser removido. <<<
+                        if stored and stored == password:
+                            auth_ok = True
+                            try:
+                                conn.execute("UPDATE users SET password=? WHERE id=?",
+                                             (generate_password_hash(password), user[0]))
+                                conn.commit()
+                            except Exception:
+                                pass
+
+                if auth_ok:
                     session['user_id'] = user[0]
                     session['username'] = username
                     session['profile'] = user[2]

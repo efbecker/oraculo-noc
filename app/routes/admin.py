@@ -1,4 +1,6 @@
 import sqlite3
+import secrets
+from werkzeug.security import generate_password_hash
 from flask import Blueprint, request, redirect, url_for, session, render_template_string
 from config import DB_PATH
 
@@ -191,7 +193,7 @@ def save_user():
         params = [profile, grupo_cliente, zabbix_url, ai_model]
         if password and password.strip() != "":
             query += ", password=?"
-            params.append(password)
+            params.append(generate_password_hash(password))  # nunca grava texto puro
         if token_zabbix:
             query += ", token_zabbix=?"
             params.append(token_zabbix)
@@ -199,8 +201,14 @@ def save_user():
         params.append(username)
         c.execute(query, tuple(params))
     else:
+        # Na criação: se vier senha, hasheia; se vier vazia, gera um hash aleatório
+        # (conta fica sem login até definir a senha) — nunca armazena texto puro.
+        if password and password.strip() != "":
+            senha_hash = generate_password_hash(password)
+        else:
+            senha_hash = generate_password_hash(secrets.token_urlsafe(24))
         c.execute("INSERT INTO users (username, password, profile, grupo_cliente, token_zabbix, zabbix_url, ai_model) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                  (username, password, profile, grupo_cliente, token_zabbix, zabbix_url, ai_model))
+                  (username, senha_hash, profile, grupo_cliente, token_zabbix, zabbix_url, ai_model))
     conn.commit()
     conn.close()
     return redirect(request.referrer or url_for('admin.index'))

@@ -39,9 +39,18 @@ def init_scan_db():
                 progress REAL DEFAULT 0,
                 stage TEXT,
                 status TEXT,
-                result_json TEXT
+                result_json TEXT,
+                owner TEXT
             )
         ''')
+        # Garante a coluna 'owner' mesmo em bancos criados por versões antigas,
+        # para podermos isolar os scans por usuário (multi-tenant).
+        try:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(scans)").fetchall()]
+            if "owner" not in cols:
+                conn.execute("ALTER TABLE scans ADD COLUMN owner TEXT")
+        except Exception:
+            pass
         # WAL + busy_timeout reduzem drasticamente os erros "database is locked"
         # quando o thread do scan e as requisições web tocam o SQLite ao mesmo tempo.
         try:
@@ -129,8 +138,8 @@ def start_scan_thread(target, username, tts_enabled=False):
     with sqlite3.connect(DB_PATH, timeout=20) as conn:
         conn.execute("PRAGMA busy_timeout=15000")
         conn.execute(
-            "INSERT INTO scans (id, target, progress, stage, status) VALUES (?, ?, 0, 'Inicializando...', 'running')",
-            (scan_id, target)
+            "INSERT INTO scans (id, target, progress, stage, status, owner) VALUES (?, ?, 0, 'Inicializando...', 'running', ?)",
+            (scan_id, target, username)
         )
         conn.commit()
 

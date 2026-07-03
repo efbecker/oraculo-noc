@@ -106,18 +106,25 @@ def clear_history():
     except Exception as e: return jsonify({"error": str(e)}), 500
 
 @bp.route('/api/active_scans', methods=['GET'])
+@login_required
 def get_active_scans():
     try:
         import sqlite3
         from config import DB_PATH
+        username = session.get('username')
         with sqlite3.connect(DB_PATH, timeout=15) as conn:
             conn.row_factory = sqlite3.Row
-            rows = conn.execute("SELECT id, target, progress, stage FROM scans WHERE status='running'").fetchall()
+            # Isolamento multi-tenant: cada usuário só enxerga os SEUS scans em execução.
+            rows = conn.execute(
+                "SELECT id, target, progress, stage FROM scans WHERE status='running' AND owner=?",
+                (username,)
+            ).fetchall()
             return jsonify([dict(r) for r in rows])
     except Exception as e:
         return jsonify([])
 
 @bp.route('/api/download/<scan_id>', methods=['GET'])
+@login_required
 def download_report(scan_id):
     try:
         import sqlite3
@@ -127,10 +134,17 @@ def download_report(scan_id):
         import re
         from datetime import datetime
         
+        username = session.get('username')
+        profile = str(session.get('profile') or '').upper().strip()
         with sqlite3.connect(DB_PATH, timeout=15) as conn:
-            row = conn.execute("SELECT target, result_json FROM scans WHERE id = ?", (scan_id,)).fetchone()
+            row = conn.execute("SELECT target, result_json, owner FROM scans WHERE id = ?", (scan_id,)).fetchone()
             if not row or not row[1]: return "Relatório não disponível.", 404
-            
+
+            # Só o dono do scan (ou um administrador) pode baixar o relatório.
+            owner = row[2]
+            if owner != username and profile not in ('ADMIN', 'ADMINISTRADOR'):
+                return "Acesso negado.", 403
+
             target = row[0]
             ai_text = json.loads(row[1]).get("ai_analysis", "")
             
