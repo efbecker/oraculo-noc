@@ -286,11 +286,12 @@
                     appendMessage('bot', `❌ Erro do servidor: ${data.error}`);
                 } else {
                     if (data.action === 'scan') {
-                        // Mostra já a confirmação textual ("SecOps Ativado!")...
+                        // Mostra já a confirmação textual...
                         if (data.reply) appendMessage('bot', data.reply, data.is_html, data.timestamp);
-                        // ...e ativa o Scan Widget com a barra de progresso.
-                        activeScans[data.scan_id] = { target: data.target, stage: "Iniciando Nmap...", progress: 0 };
-                        createScanWidget(data.scan_id, data.target, "Iniciando Nmap...", 0);
+                        // ...e ativa o widget de progresso (serve para scan Nmap E relatórios).
+                        const estagioInicial = data.stage || "Iniciando...";
+                        activeScans[data.scan_id] = { target: data.target, stage: estagioInicial, progress: 0 };
+                        createScanWidget(data.scan_id, data.target, estagioInicial, 0);
                         startRadar(); 
                     } else {
                         appendMessage('bot', data.reply || "⚠️ Sem resposta...", data.is_html, data.timestamp);

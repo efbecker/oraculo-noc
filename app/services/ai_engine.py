@@ -7,6 +7,7 @@ import oci
 from datetime import datetime
 from config import OCI_ENDPOINT, OCI_COMPARTMENT_ID, DB_PATH
 from app.services.secops import start_scan_thread
+from app.services.report_jobs import start_report_job, FIRST_STAGE as REPORT_FIRST_STAGE
 from app.services.zabbix import (
     consultar_status_host_zabbix,
     consultar_incidentes_zabbix,
@@ -54,7 +55,7 @@ def get_user_profile(username):
 # (perfil normalizado), evitando falsos positivos de substring.
 # Para também liberar o NOC, basta adicionar "NOC" ao conjunto abaixo.
 # ==========================================================================
-PERFIS_AUTORIZADOS_SCAN = {"ADMIN", "ADMINISTRADOR", "NOC"}
+PERFIS_AUTORIZADOS_SCAN = {"ADMIN", "ADMINISTRADOR"}
 
 def perfil_pode_escanear(perfil):
     return str(perfil).upper().strip() in PERFIS_AUTORIZADOS_SCAN
@@ -129,18 +130,33 @@ def process_oraculo_message(message, username, token_zabbix, grupo_cliente, tts_
         target = "TODOS"
         target_match = re.search(r'(?:do|da|servidor|vm|host)\s+([a-zA-Z0-9_-]+)', msg_l)
         if target_match: target = target_match.group(1)
+
+        metrica = "CPU"
+        if any(x in msg_l for x in ['memoria', 'memória']): metrica = "MEMORIA"
+        elif 'disco' in msg_l: metrica = "DISCO"
+        elif 'rede' in msg_l: metrica = "REDE"
         
         logger.info(f"[Relatório] Usuário '{username}' solicitou relatório FinOps/Consumo para alvo: {target} ({dias} dias).")
-        
-        if target == "TODOS": reply = gerar_relatorio_consumo_todos(dias, token_zabbix, grupo_cliente, zabbix_url)
+
+        # Fecha as credenciais numa função geradora; o relatório em si (formato
+        # HTML) permanece EXATAMENTE o mesmo, apenas passa a rodar em background.
+        dias_txt = int(dias) if float(dias).is_integer() else dias
+        if target == "TODOS":
+            label = f"Relatório FinOps ({dias_txt} dia(s))"
+            def _gerar():
+                return gerar_relatorio_consumo_todos(dias, token_zabbix, grupo_cliente, zabbix_url)
         else:
-            metrica = "CPU"
-            if any(x in msg_l for x in ['memoria', 'memória']): metrica = "MEMORIA"
-            elif 'disco' in msg_l: metrica = "DISCO"
-            elif 'rede' in msg_l: metrica = "REDE"
-            reply = gerar_grafico_zabbix(target, metrica, dias, token_zabbix, zabbix_url)
-        
-        return {"reply": reply, "audio_path": None, "is_html": 1}
+            label = f"Relatório {target} ({dias_txt} dia(s))"
+            def _gerar():
+                return gerar_grafico_zabbix(target, metrica, dias, token_zabbix, zabbix_url)
+
+        job_id = start_report_job(username, label, _gerar)
+        if not job_id:
+            return {"reply": "⚠️ Não foi possível iniciar o relatório. Tente novamente.", "audio_path": None, "is_html": 0}
+
+        intro = ("📊 **Relatório em processamento!**\nEstou coletando os dados do seu ambiente no Zabbix.\n\n"
+                 "*Assim que terminar, o relatório aparecerá automaticamente aqui no chat.*")
+        return {"reply": intro, "action": "scan", "target": label, "scan_id": job_id, "stage": REPORT_FIRST_STAGE, "is_html": 0}
 
     # SecOps - Nmap Scan (APENAS ADMINISTRADOR)
     if any(p in msg_l for p in ['scan', 'nmap', 'secops', 'vulnerabilidade']):
