@@ -66,3 +66,4 @@
 03/07/2026 18:30:40 | INFO | Serving on http://0.0.0.0:5000
 03/07/2026 18:31:05 | WARNING | [SecOps AUDIT] 🚨 Usuário 'armazem' (Perfil: ADMINISTRADOR) INICIOU scan profundo no alvo: colegiobonja.com.br.
 03/07/2026 18:31:05 | INFO | [SecOps] Varredura Progressiva em colegiobonja.com.br
+03/07/2026 18:55:05 | INFO | Serving on http://0.0.0.0:5000

@@ -2,14 +2,14 @@
 <html lang="pt-br">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
     <title>Oráculo - Painel NOC & SecOps</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #0b1117; color: #e0e0e0; margin: 0; display: flex; height: 100vh; height: 100dvh; overflow: hidden; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #0b1117; color: #e0e0e0; margin: 0; display: flex; height: 100vh; height: 100dvh; height: var(--app-height, 100dvh); overflow: hidden; }
         .sidebar { width: 250px; background-color: #080c11; border-right: 1px solid #1f2933; display: flex; flex-direction: column; flex-shrink: 0; }
         .sidebar-header { padding: 25px 20px; font-size: 18px; font-weight: bold; letter-spacing: 1px; display: flex; align-items: center; gap: 10px; color: #fff; }
         .badge-noc { background: #00e5ff; color: #000; font-size: 10px; padding: 3px 6px; border-radius: 4px; font-weight: 800; }
@@ -25,7 +25,7 @@
         .badge-logout { background: transparent; border: none; color: #ff4d4d; cursor: pointer; padding: 6px 10px; font-size: 16px; transition: 0.3s; text-decoration: none; }
         .badge-logout:hover { color: #ff1a1a; transform: scale(1.1); }
         
-        .chat-messages { flex: 1; overflow-y: auto; padding: 80px 15% 20px 15%; display: flex; flex-direction: column; gap: 20px; -webkit-overflow-scrolling: touch; }
+        .chat-messages { flex: 1; min-height: 0; overflow-y: auto; padding: 80px 15% 20px 15%; display: flex; flex-direction: column; gap: 20px; -webkit-overflow-scrolling: touch; }
         .msg-user { background: #1e293b; color: #fff; padding: 12px 20px; border-radius: 20px; max-width: 70%; align-self: flex-end; font-size: 14.5px; line-height: 1.5; border-bottom-right-radius: 4px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); word-wrap: break-word; }
         .msg-bot { border-left: 3px solid #00e5ff; padding-left: 20px; color: #cbd5e1; max-width: 85%; align-self: flex-start; font-size: 14.5px; line-height: 1.6; margin-bottom: 10px; word-wrap: break-word; }
         .msg-bot strong { color: #fff; }
@@ -59,12 +59,16 @@
 
         @media (max-width: 768px) {
             body { flex-direction: column; }
+            /* No mobile o cabeçalho fica ACIMA: a main-area não pode mais valer 100%
+               da tela, senão empurra a caixa de digitar para fora (que era o bug).
+               Ela passa a ocupar só o espaço restante e pode encolher. */
+            .main-area { height: auto; flex: 1; min-height: 0; }
             .sidebar { width: 100%; height: auto; border-right: none; border-bottom: 1px solid #1f2933; flex-shrink: 0; }
             .sidebar-header { padding: 12px 15px; justify-content: center; font-size: 16px; }
             .sidebar-section, .sidebar-item { display: none; }
-            .top-right-header { position: relative; top: 0; right: 0; padding: 10px 15px; background: #080c11; justify-content: center; width: 100%; box-sizing: border-box; gap: 8px; flex-shrink: 0; }
+            .top-right-header { position: relative; top: 0; right: 0; padding: 10px 15px; background: #080c11; justify-content: center; width: 100%; box-sizing: border-box; gap: 8px; flex-shrink: 0; flex-wrap: wrap; }
             .badge-info, .badge-admin { padding: 6px 10px; font-size: 11px; }
-            .chat-messages { padding: 15px; padding-bottom: 15px; flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+            .chat-messages { padding: 15px; padding-bottom: 15px; flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
             .msg-user { max-width: 90%; font-size: 14px; }
             .msg-bot { max-width: 95%; font-size: 14px; }
             .input-wrapper { padding: 10px 10px; width: 100%; box-sizing: border-box; background: #0d131a; padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
@@ -108,6 +112,25 @@
     </div>
 
     <script>
+        // ===== Altura visível real (corrige caixa de texto inacessível no mobile) =====
+        // Usa a Visual Viewport API para acompanhar a barra do navegador e o teclado
+        // virtual, mantendo a área do app sempre dentro do que está visível na tela.
+        (function () {
+            function ajustarAltura() {
+                var h = (window.visualViewport && window.visualViewport.height)
+                        ? window.visualViewport.height
+                        : window.innerHeight;
+                document.documentElement.style.setProperty('--app-height', h + 'px');
+            }
+            ajustarAltura();
+            window.addEventListener('resize', ajustarAltura);
+            window.addEventListener('orientationchange', function () { setTimeout(ajustarAltura, 200); });
+            if (window.visualViewport) {
+                window.visualViewport.addEventListener('resize', ajustarAltura);
+                window.visualViewport.addEventListener('scroll', ajustarAltura);
+            }
+        })();
+
         const chatMessages = document.getElementById('chatMessages');
         const chatInput = document.getElementById('chatInput');
         const loading = document.getElementById('loading');
@@ -282,6 +305,11 @@
                 appendMessage('bot', '❌ Erro de comunicação.');
             }
         }
+
+        // Ao focar a caixa (teclado abre no mobile), garante que ela fique visível.
+        chatInput.addEventListener('focus', function () {
+            setTimeout(function () { chatMessages.scrollTop = chatMessages.scrollHeight; }, 300);
+        });
 
         window.onload = loadHistory;
     </script>
