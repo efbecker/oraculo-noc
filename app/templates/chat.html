@@ -31,9 +31,14 @@
         .msg-bot { border-left: 3px solid #00e5ff; padding-left: 20px; color: #cbd5e1; max-width: 85%; align-self: flex-start; font-size: 14.5px; line-height: 1.6; margin-bottom: 10px; }
         .msg-bot strong { color: #fff; }
         
-        /* Estilo da Data e Hora */
         .msg-time { display: block; font-size: 11px; color: rgba(255,255,255,0.4); text-align: right; margin-top: 6px; font-family: monospace; }
         .msg-bot .msg-time { text-align: left; }
+        
+        /* LINDA BARRA DE PROGRESSO DO SECOPS */
+        .secops-progress-container { background: #1a1010; border: 1px solid #ff4d4d; border-radius: 8px; padding: 15px; margin: 15px 0; display: none; flex-direction: column; gap: 10px; box-shadow: 0 0 15px rgba(255,77,77,0.1); }
+        .secops-progress-header { display: flex; justify-content: space-between; font-size: 13px; font-weight: bold; color: #ff4d4d; }
+        .secops-bar-bg { background: #2a1515; height: 6px; border-radius: 4px; overflow: hidden; width: 100%; }
+        .secops-bar-fill { background: linear-gradient(90deg, #ff4d4d, #ff9e00); height: 100%; width: 45%; animation: scan-loading 2s infinite linear; }
         
         .input-wrapper { padding: 20px 15%; padding-bottom: 35px; background: transparent; }
         .input-box { background: #151e27; border: 1px solid #2d3748; border-radius: 30px; display: flex; align-items: center; padding: 5px 10px 5px 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); }
@@ -50,6 +55,7 @@
         
         .loading { color: #00e5ff; font-size: 14px; font-style: italic; margin-left: 20px; display: none; }
         
+        @keyframes scan-loading { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
         @keyframes pulsar-rec { from { opacity: 0.4; } to { opacity: 1; } }
 
         @media (max-width: 768px) {
@@ -74,10 +80,8 @@
         <div class="sidebar-section">
             <span><i class="fas fa-history" style="margin-right: 5px;"></i> Histórico</span>
             <div style="display: flex; gap: 15px;">
-                <!-- O NOVO CHAT (Sinal de +) APENAS LIMPA A TELA VISUALMENTE -->
-                <i class="fas fa-plus icon-btn" title="Nova Conversa (Limpar Tela)" onclick="document.getElementById('chatMessages').innerHTML = '';"></i>
-                <!-- A LIXEIRA APAGA O BANCO DE DADOS DE FATO -->
-                <i class="fas fa-trash icon-btn" title="Apagar Histórico Permanente" onclick="clearHistory()"></i>
+                <i class="fas fa-plus icon-btn" title="Nova Conversa" onclick="document.getElementById('chatMessages').innerHTML = '';"></i>
+                <i class="fas fa-trash icon-btn" title="Apagar Histórico" onclick="clearHistory()"></i>
             </div>
         </div>
         <div class="sidebar-item">
@@ -95,7 +99,19 @@
             <a href="/logout" class="badge-logout" title="Sair"><i class="fas fa-power-off"></i></a>
         </div>
         
-        <div class="chat-messages" id="chatMessages"></div>
+        <div class="chat-messages" id="chatMessages">
+            <div class="secops-progress-container" id="secopsProgress">
+                <div class="secops-progress-header">
+                    <span><i class="fas fa-shield-alt fa-spin"></i> Executando Varredura Tática Nmap...</span>
+                    <span id="secopsTargetText">Alvo: -</span>
+                </div>
+                <div class="secops-bar-bg">
+                    <div class="secops-bar-fill"></div>
+                </div>
+                <div style="font-size: 11px; color: #888; font-style: italic;">Auditoria em background ativa. O relatório será injetado automaticamente assim que concluído.</div>
+            </div>
+        </div>
+        
         <div id="loading" class="loading msg-bot">Oráculo está analisando o Zabbix...</div>
 
         <div class="input-wrapper">
@@ -114,34 +130,33 @@
         const loading = document.getElementById('loading');
         const btnSpeaker = document.getElementById('btnSpeaker');
         const btnMic = document.getElementById('btnMic');
+        const secopsProgress = document.getElementById('secopsProgress');
+        const secopsTargetText = document.getElementById('secopsTargetText');
 
         let ttsEnabled = false;
         let recognition = null;
         let isRecording = false;
+        let pollingInterval = null; // O RADAR
 
         if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             recognition = new SpeechRecognition();
             recognition.lang = 'pt-BR';
-            recognition.continuous = false;
-            recognition.interimResults = false;
             recognition.onstart = () => { isRecording = true; btnMic.classList.add('recording'); };
             recognition.onresult = (event) => {
                 chatInput.value = event.results[0][0].transcript;
                 sendMessage();
             };
-            recognition.onerror = (e) => { console.error("Erro STT:", e); };
             recognition.onend = () => { isRecording = false; btnMic.classList.remove('recording'); };
         }
 
         function toggleTTS() {
             ttsEnabled = !ttsEnabled;
-            if (ttsEnabled) { btnSpeaker.classList.add('active'); } 
-            else { btnSpeaker.classList.remove('active'); }
+            btnSpeaker.classList.toggle('active', ttsEnabled);
         }
 
         function toggleSTT() {
-            if (!recognition) { alert("Reconhecimento de voz não suportado."); return; }
+            if (!recognition) { alert("Não suportado."); return; }
             if (isRecording) { recognition.stop(); } else { recognition.start(); }
         }
 
@@ -149,28 +164,46 @@
             try {
                 const response = await fetch('/api/chat/history');
                 const messages = await response.json();
+                
+                // Preserva o elemento de progresso grudado no topo se ele estiver visível
+                const progressBackup = secopsProgress.style.display === 'flex' ? secopsProgress : null;
                 chatMessages.innerHTML = '';
+                if(progressBackup) chatMessages.appendChild(progressBackup);
+
                 messages.forEach(msg => appendMessage(msg.sender === 'user' ? 'user' : 'bot', msg.content, msg.is_html, msg.timestamp));
                 chatMessages.scrollTop = chatMessages.scrollHeight;
-            } catch (e) { console.error("Erro ao carregar histórico", e); }
+            } catch (e) { console.error(e); }
+        }
+
+        // FUNÇÃO DO RADAR: Fica checando o histórico silenciosamente até o Nmap cuspir o relatório
+        function startRadar() {
+            if (pollingInterval) clearInterval(pollingInterval);
+            pollingInterval = setInterval(async () => {
+                const response = await fetch('/api/chat/history');
+                const messages = await response.json();
+                if (messages.length > 0) {
+                    const lastMsg = messages[messages.length - 1];
+                    // Se a última mensagem contiver dados do nmap/scan concluído, desliga a barra!
+                    if (lastMsg.sender === 'bot' && (lastMsg.content.includes("Nmap scan report") || lastMsg.content.includes("Portas abertas") || lastMsg.content.includes("vulnerabilidade"))) {
+                        clearInterval(pollingInterval);
+                        secopsProgress.style.display = 'none';
+                        loadHistory(); // Atualiza a tela com o relatório quentinho!
+                    }
+                }
+            }, 8000);
         }
 
         async function clearHistory() {
-            if(confirm("ATENÇÃO: Deseja apagar TODO o histórico de conversas permanentemente?")) {
+            if(confirm("Deseja apagar todo o histórico de conversas permanentemente?")) {
                 await fetch('/api/chat/clear', { method: 'POST' });
                 chatMessages.innerHTML = '';
             }
         }
 
-        // Função appendMessage atualizada para receber e injetar a data/hora
         function appendMessage(sender, content, isHtml = false, timestamp = '') {
             const msgDiv = document.createElement('div');
             msgDiv.classList.add(sender === 'user' ? 'msg-user' : 'msg-bot');
-            
-            let htmlContent = isHtml ? content : content.replace(/\n/g, '<br>');
-            let timeHtml = timestamp ? `<span class="msg-time">${timestamp}</span>` : '';
-            
-            msgDiv.innerHTML = htmlContent + timeHtml;
+            msgDiv.innerHTML = (isHtml ? content : content.replace(/\n/g, '<br>')) + (timestamp ? `<span class="msg-time">${timestamp}</span>` : '');
             chatMessages.appendChild(msgDiv);
             chatMessages.scrollTop = chatMessages.scrollHeight;
         }
@@ -180,7 +213,6 @@
             if (!message) return;
             chatInput.value = '';
             
-            // Gera um relógio temporário na tela enquanto envia pro servidor
             const now = new Date();
             const timeStr = now.toLocaleDateString('pt-BR') + ' ' + now.toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'});
             appendMessage('user', message, false, timeStr);
@@ -200,17 +232,23 @@
                 if(data.error) {
                     appendMessage('bot', `❌ Erro do servidor: ${data.error}`);
                 } else {
-                    // Injeta a resposta com o Timestamp retornado pelo Python
-                    appendMessage('bot', data.reply || "⚠️ Nenhuma resposta...", data.is_html, data.timestamp);
+                    appendMessage('bot', data.reply || "⚠️ Sem resposta...", data.is_html, data.timestamp);
                     
+                    // SE FOR UM SCAN, DISPARA A BARRA DE PROGRESSO E O RADAR!
+                    if (data.action === 'scan') {
+                        secopsTargetText.innerText = "Alvo: " + (data.target || "apl07.excia.com.br");
+                        secopsProgress.style.display = 'flex';
+                        chatMessages.prepend(secopsProgress); // Gruda a barra no topo do chat
+                        startRadar();
+                    }
+
                     if (ttsEnabled && data.audio_path) {
-                        const audio = new Audio(data.audio_path);
-                        audio.play().catch(err => console.error("Erro áudio:", err));
+                        new Audio(data.audio_path).play().catch(e => console.error(e));
                     }
                 }
             } catch (e) {
                 loading.style.display = 'none';
-                appendMessage('bot', '❌ Erro de comunicação com o servidor.');
+                appendMessage('bot', '❌ Erro de comunicação.');
             }
         }
 

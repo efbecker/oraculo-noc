@@ -1,1 +1,3 @@
 03/07/2026 11:04:33 | INFO | Serving on http://0.0.0.0:5000
+03/07/2026 11:05:40 | WARNING | [SecOps AUDIT] 🚨 Usuário 'armazem' (Perfil: ADMINISTRADOR) INICIOU scan profundo no alvo: apl07.excia.com.br.
+03/07/2026 12:01:19 | INFO | Serving on http://0.0.0.0:5000
