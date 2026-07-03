@@ -3,10 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    
     <title>Oráculo - Painel NOC & SecOps</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        /* DVH é o segredo para o iOS não cortar o ecrã */
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #0b1117; color: #e0e0e0; margin: 0; display: flex; height: 100vh; height: 100dvh; overflow: hidden; }
         
         .sidebar { width: 250px; background-color: #080c11; border-right: 1px solid #1f2933; display: flex; flex-direction: column; flex-shrink: 0; }
@@ -35,7 +38,6 @@
         .msg-time { display: block; font-size: 11px; color: rgba(255,255,255,0.4); text-align: right; margin-top: 6px; font-family: monospace; }
         .msg-bot .msg-time { text-align: left; }
         
-        /* BARRA SECOPS - PROGRESSÃO REAL */
         .secops-card { background: #1a1010; border: 1px solid #ff4d4d; border-radius: 8px; padding: 15px; margin-top: 10px; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 0 15px rgba(255,77,77,0.1); width: 100%; max-width: 500px; box-sizing: border-box; }
         .secops-header { display: flex; justify-content: space-between; font-size: 13px; font-weight: bold; color: #ff4d4d; flex-wrap: wrap; gap: 5px; }
         .secops-bg { background: #2a1515; height: 6px; border-radius: 4px; overflow: hidden; width: 100%; position: relative; }
@@ -44,7 +46,6 @@
         
         .input-wrapper { padding: 15px 15%; background: #0b1117; flex-shrink: 0; padding-bottom: calc(15px + env(safe-area-inset-bottom)); }
         .input-box { background: #151e27; border: 1px solid #2d3748; border-radius: 30px; display: flex; align-items: center; padding: 5px 10px 5px 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); }
-        /* Aumentado font-size p/ 16px evita o Zoom forçado no iOS ao clicar no input */
         .input-box input { flex: 1; background: transparent; border: none; color: #fff; padding: 12px 10px; outline: none; font-size: 16px; min-width: 0; }
         .input-box input::placeholder { color: #64748b; font-size: 14px; }
         
@@ -60,7 +61,6 @@
         
         @keyframes pulsar-rec { from { opacity: 0.4; } to { opacity: 1; } }
 
-        /* REGRAS MOBILE BLINDADAS */
         @media (max-width: 768px) {
             body { flex-direction: column; }
             .sidebar { width: 100%; height: auto; border-right: none; border-bottom: 1px solid #1f2933; flex-shrink: 0; }
@@ -68,12 +68,9 @@
             .sidebar-section, .sidebar-item { display: none; }
             .top-right-header { position: relative; top: 0; right: 0; padding: 10px 15px; background: #080c11; justify-content: center; width: 100%; box-sizing: border-box; gap: 8px; flex-shrink: 0; }
             .badge-info, .badge-admin { padding: 6px 10px; font-size: 11px; }
-            
             .chat-messages { padding: 15px; padding-bottom: 15px; flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
             .msg-user { max-width: 90%; font-size: 14px; }
             .msg-bot { max-width: 95%; font-size: 14px; }
-            
-            /* Input fixado corretamente na base p/ Safari Mobile */
             .input-wrapper { padding: 10px 10px; width: 100%; box-sizing: border-box; background: #0d131a; padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
         }
     </style>
@@ -141,38 +138,12 @@
             { text: "> Compilando relatório final de auditoria...", width: "98%" }
         ];
 
-        if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            recognition = new SpeechRecognition();
-            recognition.lang = 'pt-BR';
-            recognition.onstart = () => { isRecording = true; btnMic.classList.add('recording'); };
-            recognition.onresult = (event) => {
-                chatInput.value = event.results[0][0].transcript;
-                sendMessage();
-            };
-            recognition.onend = () => { isRecording = false; btnMic.classList.remove('recording'); };
-        }
-
-        function toggleTTS() { ttsEnabled = !ttsEnabled; btnSpeaker.classList.toggle('active', ttsEnabled); }
-        function toggleSTT() { if (!recognition) { alert("Não suportado."); return; } if (isRecording) { recognition.stop(); } else { recognition.start(); } }
-
-        async function loadHistory() {
-            try {
-                const response = await fetch('/api/chat/history');
-                const messages = await response.json();
-                
-                const existingBar = document.getElementById('secopsBarCard');
-                chatMessages.innerHTML = '';
-                messages.forEach(msg => appendMessage(msg.sender === 'user' ? 'user' : 'bot', msg.content, msg.is_html, msg.timestamp));
-                if (existingBar) { chatMessages.appendChild(existingBar); }
-                chatMessages.scrollTop = chatMessages.scrollHeight;
-            } catch (e) { console.error(e); }
-        }
-
         function showSecOpsBar(target) {
             if (document.getElementById('secopsBarCard')) return; 
             
-            const barHTML = `
+            const wrapper = document.createElement('div');
+            wrapper.classList.add('msg-bot');
+            wrapper.innerHTML = `
             <div class="secops-card" id="secopsBarCard">
                 <div class="secops-header">
                     <span><i class="fas fa-shield-alt fa-spin"></i> Varredura Nmap</span>
@@ -184,10 +155,7 @@
                 <div class="secops-status-text" id="secopsPhaseText">> Inicializando motor Nmap...</div>
             </div>`;
             
-            const wrapper = document.createElement('div');
-            wrapper.classList.add('msg-bot');
-            wrapper.innerHTML = barHTML;
-            chatMessages.appendChild(wrapper.firstElementChild);
+            chatMessages.appendChild(wrapper);
             chatMessages.scrollTop = chatMessages.scrollHeight;
 
             let phaseIndex = 0;
@@ -206,7 +174,7 @@
 
         function removeSecOpsBar() {
             const bar = document.getElementById('secopsBarCard');
-            if (bar) bar.remove();
+            if (bar) bar.closest('.msg-bot').remove();
             if (textInterval) clearInterval(textInterval);
         }
 
@@ -224,6 +192,39 @@
                     }
                 }
             }, 10000); 
+        }
+
+        async function loadHistory() {
+            try {
+                const response = await fetch('/api/chat/history');
+                const messages = await response.json();
+                
+                chatMessages.innerHTML = '';
+                let isScanRunning = false;
+                let lastTarget = "Desconhecido";
+
+                messages.forEach(msg => {
+                    appendMessage(msg.sender === 'user' ? 'user' : 'bot', msg.content, msg.is_html, msg.timestamp);
+                    
+                    // AUDITORIA INTELIGENTE: Lê o histórico para saber se deve pintar a barra!
+                    if (msg.sender === 'bot' && msg.content.includes('SecOps Ativado')) {
+                        isScanRunning = true;
+                        const match = msg.content.match(/alvo:\s*`([^`]+)`/);
+                        if (match) lastTarget = match[1];
+                    }
+                    if (msg.sender === 'bot' && (msg.content.includes('Nmap scan report') || msg.content.includes('Portas abertas') || msg.content.includes('vulnerabilidade'))) {
+                        isScanRunning = false;
+                    }
+                });
+                
+                // MAGIA: Se deste refresh e o scan não acabou, a barra renasce!
+                if (isScanRunning) {
+                    showSecOpsBar(lastTarget);
+                    startRadar();
+                }
+                
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            } catch (e) { console.error(e); }
         }
 
         async function clearHistory() {
@@ -250,11 +251,11 @@
             const timeStr = now.toLocaleDateString('pt-BR') + ' ' + now.toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'});
             appendMessage('user', message, false, timeStr);
             
-            // SE FOR COMANDO NMAP, INJETA A BARRA INSTANTANEAMENTE (NÃO ESPERA O SERVIDOR RESPONDER!)
             const msgLower = message.toLowerCase();
             const isScan = msgLower.includes("scan") || msgLower.includes("nmap") || msgLower.includes("secops");
+            
+            // Ativa a barra visual instantaneamente no telemóvel para não esperar pela rede
             if(isScan) {
-                // Tenta extrair IP ou domínio básico do chat para mostrar na barra
                 const match = message.match(/\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}|\b(?:\d{1,3}\.){3}\d{1,3}\b/);
                 showSecOpsBar(match ? match[0] : "Automático");
             } else {
@@ -274,17 +275,10 @@
                 
                 if(data.error) {
                     appendMessage('bot', `❌ Erro do servidor: ${data.error}`);
-                    if(isScan) removeSecOpsBar(); // Remove se der erro
+                    if(isScan) removeSecOpsBar();
                 } else {
                     appendMessage('bot', data.reply || "⚠️ Sem resposta...", data.is_html, data.timestamp);
-                    
-                    if (data.action === 'scan') {
-                        startRadar();
-                    }
-
-                    if (ttsEnabled && data.audio_path) {
-                        new Audio(data.audio_path).play().catch(e => console.error(e));
-                    }
+                    if (data.action === 'scan') { startRadar(); }
                 }
             } catch (e) {
                 loading.style.display = 'none';

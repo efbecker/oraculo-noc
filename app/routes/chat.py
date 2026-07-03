@@ -15,7 +15,7 @@ def index():
         'chat.html', 
         username=session.get('username'), 
         profile=session.get('profile'),
-        grupo_cliente=session.get('grupo_cliente')
+        grupo_cliente=session.get('grupo_cliente'), cache_buster=str(__import__('time').time())
     )
 
 @bp.route("/api/chat/message", methods=["POST"])
