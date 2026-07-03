@@ -28,6 +28,24 @@ _CEILING = 92.0
 FIRST_STAGE = _STAGES[0][1]
 
 
+def _remover_barra_duplicada(html):
+    """Remove a barra de progresso 'falsa' que o relatório FinOps embute na mensagem
+    de chat. Agora que o widget AO VIVO mostra o progresso, essa barra estática em
+    100% ficou redundante (era a 'versão anterior' que aparecia no fim).
+
+    Atua APENAS na mensagem de chat do relatório — o dashboard baixável (escrito em
+    disco no zabbix.py) NÃO é tocado. Se o marcador não existir, devolve como veio
+    (fail-safe: nunca corta um relatório que não seja o esperado).
+    """
+    if not isinstance(html, str):
+        return html
+    # O bloco da barra é o primeiro trecho e termina no primeiro </style>;
+    # tudo depois é o '✅ Relatório Concluído' + botão de download.
+    if "Processamento FinOps Concluído" in html and "</style>" in html:
+        return html.split("</style>", 1)[1]
+    return html
+
+
 def start_report_job(username, label, generator_fn):
     """Inicia um relatório em background.
     - username: dono (para isolamento multi-tenant no /api/active_scans)
@@ -76,7 +94,7 @@ def start_report_job(username, label, generator_fn):
         reply_content = ""
         final_status = "finished"
         try:
-            reply_content = generator_fn() or "Relatório vazio."
+            reply_content = _remover_barra_duplicada(generator_fn() or "Relatório vazio.")
         except Exception as e:
             logger.error(f"[Report] Erro ao gerar relatório para '{username}': {e}")
             reply_content = f"⚠️ **Erro ao gerar o relatório.**\n`{e}`"
