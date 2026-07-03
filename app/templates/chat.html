@@ -2,10 +2,11 @@
 <html lang="pt-br">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Oráculo - Painel NOC & SecOps</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
+        /* Correção para Mobile: Tira o overflow hidden do body em ecrãs pequenos */
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #0b1117; color: #e0e0e0; margin: 0; display: flex; height: 100vh; overflow: hidden; }
         
         .sidebar { width: 250px; background-color: #080c11; border-right: 1px solid #1f2933; display: flex; flex-direction: column; flex-shrink: 0; }
@@ -16,7 +17,7 @@
         .icon-btn:hover { color: #00e5ff; }
         .sidebar-item { margin: 15px; background: #131c26; padding: 12px 15px; border-radius: 8px; color: #00e5ff; font-size: 14px; display: flex; align-items: center; gap: 10px; font-weight: 500; cursor: pointer; border-left: 3px solid #00e5ff; }
         
-        .main-area { flex: 1; display: flex; flex-direction: column; position: relative; background-color: #0d131a; min-width: 0; }
+        .main-area { flex: 1; display: flex; flex-direction: column; position: relative; background-color: #0d131a; min-width: 0; height: 100%; }
         
         .top-right-header { position: absolute; top: 20px; right: 25px; display: flex; gap: 10px; z-index: 10; flex-wrap: wrap; }
         .badge-info { background: #1f2933; padding: 6px 15px; border-radius: 6px; font-size: 12px; display: flex; align-items: center; gap: 8px; color: #aaa; border: 1px solid #2d3748; }
@@ -25,22 +26,24 @@
         .badge-logout { background: transparent; border: none; color: #ff4d4d; cursor: pointer; padding: 6px 10px; font-size: 16px; transition: 0.3s; text-decoration: none; }
         .badge-logout:hover { color: #ff1a1a; transform: scale(1.1); }
         
-        .chat-messages { flex: 1; overflow-y: auto; padding: 80px 15% 20px 15%; display: flex; flex-direction: column; gap: 20px; }
+        /* Ajuste do Scroll para Mobile */
+        .chat-messages { flex: 1; overflow-y: auto; padding: 80px 15% 20px 15%; display: flex; flex-direction: column; gap: 20px; -webkit-overflow-scrolling: touch; }
         
-        .msg-user { background: #1e293b; color: #fff; padding: 12px 20px; border-radius: 20px; max-width: 70%; align-self: flex-end; font-size: 14.5px; line-height: 1.5; border-bottom-right-radius: 4px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-        .msg-bot { border-left: 3px solid #00e5ff; padding-left: 20px; color: #cbd5e1; max-width: 85%; align-self: flex-start; font-size: 14.5px; line-height: 1.6; margin-bottom: 10px; }
+        .msg-user { background: #1e293b; color: #fff; padding: 12px 20px; border-radius: 20px; max-width: 70%; align-self: flex-end; font-size: 14.5px; line-height: 1.5; border-bottom-right-radius: 4px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); word-wrap: break-word; }
+        .msg-bot { border-left: 3px solid #00e5ff; padding-left: 20px; color: #cbd5e1; max-width: 85%; align-self: flex-start; font-size: 14.5px; line-height: 1.6; margin-bottom: 10px; word-wrap: break-word; }
         .msg-bot strong { color: #fff; }
         
         .msg-time { display: block; font-size: 11px; color: rgba(255,255,255,0.4); text-align: right; margin-top: 6px; font-family: monospace; }
         .msg-bot .msg-time { text-align: left; }
         
-        /* LINDA BARRA DE PROGRESSO DO SECOPS */
-        .secops-progress-container { background: #1a1010; border: 1px solid #ff4d4d; border-radius: 8px; padding: 15px; margin: 15px 0; display: none; flex-direction: column; gap: 10px; box-shadow: 0 0 15px rgba(255,77,77,0.1); }
-        .secops-progress-header { display: flex; justify-content: space-between; font-size: 13px; font-weight: bold; color: #ff4d4d; }
-        .secops-bar-bg { background: #2a1515; height: 6px; border-radius: 4px; overflow: hidden; width: 100%; }
-        .secops-bar-fill { background: linear-gradient(90deg, #ff4d4d, #ff9e00); height: 100%; width: 45%; animation: scan-loading 2s infinite linear; }
+        /* BARRA SECOPS PROGRESSIVA (Sem Loop) */
+        .secops-card { background: #1a1010; border: 1px solid #ff4d4d; border-radius: 8px; padding: 15px; margin-top: 10px; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 0 15px rgba(255,77,77,0.1); width: 100%; max-width: 500px; box-sizing: border-box; }
+        .secops-header { display: flex; justify-content: space-between; font-size: 13px; font-weight: bold; color: #ff4d4d; flex-wrap: wrap; gap: 5px; }
+        .secops-bg { background: #2a1515; height: 6px; border-radius: 4px; overflow: hidden; width: 100%; position: relative; }
+        .secops-fill { background: linear-gradient(90deg, #ff4d4d, #ff9e00); height: 100%; width: 5%; transition: width 8s ease-in-out; } /* Transição suave em vez de loop */
+        .secops-status-text { font-size: 11px; color: #00e5ff; font-family: monospace; }
         
-        .input-wrapper { padding: 20px 15%; padding-bottom: 35px; background: transparent; }
+        .input-wrapper { padding: 20px 15%; padding-bottom: 35px; background: transparent; flex-shrink: 0; }
         .input-box { background: #151e27; border: 1px solid #2d3748; border-radius: 30px; display: flex; align-items: center; padding: 5px 10px 5px 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); }
         .input-box input { flex: 1; background: transparent; border: none; color: #fff; padding: 12px 10px; outline: none; font-size: 14px; min-width: 0; }
         .input-box input::placeholder { color: #64748b; }
@@ -55,20 +58,24 @@
         
         .loading { color: #00e5ff; font-size: 14px; font-style: italic; margin-left: 20px; display: none; }
         
-        @keyframes scan-loading { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
         @keyframes pulsar-rec { from { opacity: 0.4; } to { opacity: 1; } }
 
+        /* REGRAS MOBILE MELHORADAS */
         @media (max-width: 768px) {
-            body { flex-direction: column; }
-            .sidebar { width: 100%; height: auto; border-right: none; border-bottom: 1px solid #1f2933; }
-            .sidebar-header { padding: 15px; justify-content: center; }
+            body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+            .sidebar { width: 100%; height: auto; border-right: none; border-bottom: 1px solid #1f2933; flex-shrink: 0; }
+            .sidebar-header { padding: 10px 15px; justify-content: center; font-size: 16px; }
             .sidebar-section, .sidebar-item { display: none; }
-            .top-right-header { position: relative; top: 0; right: 0; padding: 10px; background: #080c11; justify-content: center; width: 100%; box-sizing: border-box; gap: 8px; }
-            .badge-info, .badge-admin { padding: 5px 10px; font-size: 11px; }
-            .chat-messages { padding: 20px 15px; }
-            .msg-user { max-width: 85%; }
-            .msg-bot { max-width: 100%; }
-            .input-wrapper { padding: 10px 15px 25px 15px; }
+            .top-right-header { position: relative; top: 0; right: 0; padding: 8px 15px; background: #080c11; justify-content: center; width: 100%; box-sizing: border-box; gap: 5px; flex-shrink: 0; }
+            .badge-info, .badge-admin { padding: 4px 8px; font-size: 10px; }
+            .badge-logout { padding: 4px; font-size: 14px; }
+            
+            .main-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+            .chat-messages { padding: 15px; flex: 1; overflow-y: auto; }
+            .msg-user { max-width: 90%; font-size: 13px; }
+            .msg-bot { max-width: 95%; font-size: 13px; }
+            .input-wrapper { padding: 10px; background: #0d131a; }
+            .input-box input { font-size: 14px; } /* Impede zoom no iOS */
         }
     </style>
 </head>
@@ -99,26 +106,14 @@
             <a href="/logout" class="badge-logout" title="Sair"><i class="fas fa-power-off"></i></a>
         </div>
         
-        <div class="chat-messages" id="chatMessages">
-            <div class="secops-progress-container" id="secopsProgress">
-                <div class="secops-progress-header">
-                    <span><i class="fas fa-shield-alt fa-spin"></i> Executando Varredura Tática Nmap...</span>
-                    <span id="secopsTargetText">Alvo: -</span>
-                </div>
-                <div class="secops-bar-bg">
-                    <div class="secops-bar-fill"></div>
-                </div>
-                <div style="font-size: 11px; color: #888; font-style: italic;">Auditoria em background ativa. O relatório será injetado automaticamente assim que concluído.</div>
-            </div>
-        </div>
-        
+        <div class="chat-messages" id="chatMessages"></div>
         <div id="loading" class="loading msg-bot">Oráculo está analisando o Zabbix...</div>
 
         <div class="input-wrapper">
             <div class="input-box">
                 <button class="btn-icon" id="btnSpeaker" onclick="toggleTTS()" title="Ativar Resposta por Voz"><i class="fas fa-volume-up"></i></button>
                 <button class="btn-icon" id="btnMic" onclick="toggleSTT()" title="Falar ao Microfone"><i class="fas fa-microphone"></i></button>
-                <input type="text" id="chatInput" placeholder="Pergunte ao Oráculo sobre infraestrutura ou secops..." onkeypress="if(event.key==='Enter') sendMessage()">
+                <input type="text" id="chatInput" placeholder="Pergunte sobre infraestrutura..." onkeypress="if(event.key==='Enter') sendMessage()">
                 <button class="btn-send" onclick="sendMessage()"><i class="fas fa-arrow-up"></i></button>
             </div>
         </div>
@@ -130,13 +125,23 @@
         const loading = document.getElementById('loading');
         const btnSpeaker = document.getElementById('btnSpeaker');
         const btnMic = document.getElementById('btnMic');
-        const secopsProgress = document.getElementById('secopsProgress');
-        const secopsTargetText = document.getElementById('secopsTargetText');
 
         let ttsEnabled = false;
         let recognition = null;
         let isRecording = false;
-        let pollingInterval = null; // O RADAR
+        let pollingInterval = null; 
+        let textInterval = null;
+
+        // Fases reais de um Nmap em progresso
+        const nmapPhases = [
+            { text: "> Ping Scan: Verificando se o host está ativo...", width: "15%" },
+            { text: "> SYN Stealth Scan: Identificando portas abertas...", width: "35%" },
+            { text: "> Service Scan: Sondando banners de serviço (-sV)...", width: "55%" },
+            { text: "> OS Detection: Analisando assinaturas TCP/IP...", width: "70%" },
+            { text: "> NSE Scripts: Executando scripts de vulnerabilidade básicos...", width: "85%" },
+            { text: "> NSE Scripts: Testes avançados em andamento...", width: "95%" },
+            { text: "> Compilando relatório final de auditoria...", width: "98%" }
+        ];
 
         if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -165,17 +170,61 @@
                 const response = await fetch('/api/chat/history');
                 const messages = await response.json();
                 
-                // Preserva o elemento de progresso grudado no topo se ele estiver visível
-                const progressBackup = secopsProgress.style.display === 'flex' ? secopsProgress : null;
+                const existingBar = document.getElementById('secopsBarCard');
+                
                 chatMessages.innerHTML = '';
-                if(progressBackup) chatMessages.appendChild(progressBackup);
-
                 messages.forEach(msg => appendMessage(msg.sender === 'user' ? 'user' : 'bot', msg.content, msg.is_html, msg.timestamp));
+                
+                if (existingBar) { chatMessages.appendChild(existingBar); }
+                
                 chatMessages.scrollTop = chatMessages.scrollHeight;
             } catch (e) { console.error(e); }
         }
 
-        // FUNÇÃO DO RADAR: Fica checando o histórico silenciosamente até o Nmap cuspir o relatório
+        function showSecOpsBar(target) {
+            if (document.getElementById('secopsBarCard')) return; 
+            
+            const barHTML = `
+            <div class="secops-card" id="secopsBarCard">
+                <div class="secops-header">
+                    <span><i class="fas fa-shield-alt fa-spin"></i> Varredura Nmap</span>
+                    <span>Alvo: ${target}</span>
+                </div>
+                <div class="secops-bg">
+                    <div class="secops-fill" id="secopsFillBar"></div>
+                </div>
+                <div class="secops-status-text" id="secopsPhaseText">> Inicializando motor Nmap...</div>
+            </div>`;
+            
+            const wrapper = document.createElement('div');
+            wrapper.classList.add('msg-bot');
+            wrapper.innerHTML = barHTML;
+            chatMessages.appendChild(wrapper.firstElementChild);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+
+            // Inicia o carrossel que empurra a barra para a frente
+            let phaseIndex = 0;
+            const textElement = document.getElementById('secopsPhaseText');
+            const fillBar = document.getElementById('secopsFillBar');
+            
+            if (textInterval) clearInterval(textInterval);
+            
+            // A barra vai enchendo gradualmente ao longo do tempo (cada 8 segundos avança uma etapa)
+            textInterval = setInterval(() => {
+                if (textElement && fillBar && phaseIndex < nmapPhases.length) {
+                    textElement.innerText = nmapPhases[phaseIndex].text;
+                    fillBar.style.width = nmapPhases[phaseIndex].width;
+                    phaseIndex++;
+                }
+            }, 8000); 
+        }
+
+        function removeSecOpsBar() {
+            const bar = document.getElementById('secopsBarCard');
+            if (bar) bar.remove();
+            if (textInterval) clearInterval(textInterval);
+        }
+
         function startRadar() {
             if (pollingInterval) clearInterval(pollingInterval);
             pollingInterval = setInterval(async () => {
@@ -183,18 +232,17 @@
                 const messages = await response.json();
                 if (messages.length > 0) {
                     const lastMsg = messages[messages.length - 1];
-                    // Se a última mensagem contiver dados do nmap/scan concluído, desliga a barra!
                     if (lastMsg.sender === 'bot' && (lastMsg.content.includes("Nmap scan report") || lastMsg.content.includes("Portas abertas") || lastMsg.content.includes("vulnerabilidade"))) {
                         clearInterval(pollingInterval);
-                        secopsProgress.style.display = 'none';
-                        loadHistory(); // Atualiza a tela com o relatório quentinho!
+                        removeSecOpsBar();
+                        loadHistory(); 
                     }
                 }
-            }, 8000);
+            }, 8000); 
         }
 
         async function clearHistory() {
-            if(confirm("Deseja apagar todo o histórico de conversas permanentemente?")) {
+            if(confirm("Deseja apagar todo o histórico de conversas?")) {
                 await fetch('/api/chat/clear', { method: 'POST' });
                 chatMessages.innerHTML = '';
             }
@@ -234,11 +282,8 @@
                 } else {
                     appendMessage('bot', data.reply || "⚠️ Sem resposta...", data.is_html, data.timestamp);
                     
-                    // SE FOR UM SCAN, DISPARA A BARRA DE PROGRESSO E O RADAR!
                     if (data.action === 'scan') {
-                        secopsTargetText.innerText = "Alvo: " + (data.target || "apl07.excia.com.br");
-                        secopsProgress.style.display = 'flex';
-                        chatMessages.prepend(secopsProgress); // Gruda a barra no topo do chat
+                        showSecOpsBar(data.target || "Alvo");
                         startRadar();
                     }
 
