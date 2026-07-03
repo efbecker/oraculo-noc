@@ -5,7 +5,8 @@ import sqlite3
 import oci
 from datetime import datetime
 from config import OCI_ENDPOINT, OCI_COMPARTMENT_ID, DB_PATH
-from app.services.secops import start_scan_thread, create_tts_audio
+# Importamos o start_scan_thread sem puxar funções TTS quebradas
+from app.services.secops import start_scan_thread
 from app.services.zabbix import (
     consultar_status_host_zabbix,
     consultar_incidentes_zabbix,
@@ -45,7 +46,6 @@ def obter_contexto_zabbix_real_time(token, grupo, url=None):
         return "ERRO_ZABBIX: Token da API não configurado no Painel Admin."
     try:
         status = consultar_status_host_zabbix("", token, grupo, url)
-        # Se a função interna capturou erro de request, repassamos!
         if status and "Erro de comunicação" in status:
             return f"ERRO_ZABBIX: {status}"
             
@@ -86,14 +86,13 @@ def exec_chat_with_oracle(prompt, username="admin", context="", chat_history_row
         resp = client.chat(details)
         return resp.data.chat_response.text
     except Exception as e:
-        return f"⚠️ **Falha de IA (Oracle OCI):**\nO Zabbix enviou os dados, mas a IA recusou a conexão.\nErro: `{str(e)}`\n\nVerifique o OCI_COMPARTMENT_ID no arquivo config.py do servidor."
+        return f"⚠️ **Falha de IA (Oracle OCI):**\nO Zabbix enviou os dados, mas a IA recusou a conexão.\nErro: `{str(e)}`"
 
 def process_oraculo_message(message, username, token_zabbix, grupo_cliente, tts_enabled=False, history_rows=None, zabbix_url=None):
     if not zabbix_url: zabbix_url = get_user_zabbix_url(username)
     
     msg_l = message.lower()
 
-    # Intercepta pedidos de Gráficos/Relatórios (Não gasta IA)
     if any(p in msg_l for p in ['grafico', 'gráfico', 'consumo', 'relatorio', 'relatório']):
         dias = 1.0
         dias_match = re.search(r'(\d+)\s*dias?', msg_l)
@@ -113,27 +112,28 @@ def process_oraculo_message(message, username, token_zabbix, grupo_cliente, tts_
         
         return {"reply": reply, "audio_path": None, "is_html": 1}
 
-    # Intercepta Scan Nmap (Não gasta IA)
+    # SecOps - Nmap Scan
     if any(p in msg_l for p in ['scan', 'nmap', 'secops', 'vulnerabilidade']):
         perfil = get_user_profile(username)
+        # Verifica se o utilizador tem permissão Global ou NOC/Admin
         if "ADMIN" not in perfil and "NOC" not in perfil and grupo_cliente != "GLOBAL":
             return {"reply": "🛡️ Acesso negado a ferramentas de segurança.", "audio_path": None}
+            
         ip_match = re.search(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', msg_l)
         target = ip_match.group(0) if ip_match else "127.0.0.1"
+        
+        # Inicia o scan sem tentar criar áudio imediatamente (evita o erro)
         scan_id = start_scan_thread(target, username, tts_enabled)
         return {"action": "scan", "target": target, "scan_id": scan_id}
 
-    # COLETA DO ZABBIX COM DIAGNÓSTICO
+    # IA Oracle
     context = obter_contexto_zabbix_real_time(token_zabbix, grupo_cliente, zabbix_url)
-    
-    # Se o Zabbix der erro, corta a operação e avisa na tela imediatamente!
     if "ERRO_ZABBIX" in context:
         return {
-            "reply": f"🚨 **Não consegui conectar ao Zabbix!**\n\nMotivo:\n`{context}`\n\nPor favor, verifique no Painel Admin se a URL possui `/api_jsonrpc.php` no final e se o Token está correto.", 
+            "reply": f"🚨 **Não consegui conectar ao Zabbix!**\n\nMotivo:\n`{context}`", 
             "audio_path": None, 
             "is_html": 0
         }
 
-    # Se o Zabbix funcionar, aciona a IA
     reply = exec_chat_with_oracle(message, username=username, context=context, chat_history_rows=history_rows)
     return {"reply": reply, "audio_path": None}
