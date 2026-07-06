@@ -70,3 +70,37 @@
 03/07/2026 18:57:09 | INFO | [Relatório] Usuário 'pollux' solicitou relatório FinOps/Consumo para alvo: TODOS (30.0 dias).
 03/07/2026 19:12:20 | INFO | Serving on http://0.0.0.0:5000
 03/07/2026 19:13:25 | INFO | [Relatório] Usuário 'pollux' solicitou relatório FinOps/Consumo para alvo: TODOS (7.0 dias).
+03/07/2026 19:46:09 | INFO | [Relatório] Usuário 'akato' solicitou relatório FinOps/Consumo para alvo: TODOS (30.0 dias).
+03/07/2026 19:47:31 | INFO | Serving on http://0.0.0.0:5000
+03/07/2026 19:47:52 | INFO | [IA Oracle] Usuário 'akato' iniciou interação livre com o modelo.
+03/07/2026 19:48:21 | INFO | [Relatório] Usuário 'akato' solicitou relatório FinOps/Consumo para alvo: TODOS (30.0 dias).
+04/07/2026 09:10:12 | INFO | Serving on http://0.0.0.0:5000
+04/07/2026 09:10:38 | INFO | [Relatório] Usuário 'pollux' solicitou relatório FinOps/Consumo para alvo: TODOS (7.0 dias).
+04/07/2026 09:39:36 | INFO | Serving on http://0.0.0.0:5000
+04/07/2026 09:40:36 | WARNING | [SecOps AUDIT] 🚨 Usuário 'armazem' (Perfil: ADMINISTRADOR) INICIOU scan profundo no alvo: jlle-nextcloud.armazemdc.com.br.
+04/07/2026 09:40:36 | INFO | [SecOps] Varredura Progressiva em jlle-nextcloud.armazemdc.com.br
+04/07/2026 09:41:01 | INFO | [IA Oracle] Usuário 'pollux' iniciou interação livre com o modelo.
+04/07/2026 09:41:28 | INFO | [IA Oracle] Usuário 'pollux' iniciou interação livre com o modelo.
+04/07/2026 09:41:54 | INFO | [IA Oracle] Usuário 'pollux' iniciou interação livre com o modelo.
+04/07/2026 09:42:22 | INFO | [Relatório] Usuário 'pollux' solicitou relatório FinOps/Consumo para alvo: TODOS (30.0 dias).
+04/07/2026 09:46:49 | INFO | [IA Oracle] Usuário 'armazem' iniciou interação livre com o modelo.
+04/07/2026 09:49:51 | INFO | Serving on http://0.0.0.0:5000
+04/07/2026 09:50:17 | INFO | [IA Oracle] Usuário 'armazem' iniciou interação livre com o modelo.
+04/07/2026 11:21:53 | INFO | [IA Oracle] Usuário 'armazem' iniciou interação livre com o modelo.
+04/07/2026 18:26:34 | INFO | [IA Oracle] Usuário 'armazem' iniciou interação livre com o modelo.
+04/07/2026 18:33:27 | INFO | [IA Oracle] Usuário 'pollux' iniciou interação livre com o modelo.
+04/07/2026 18:33:31 | INFO | [IA Oracle] Usuário 'pollux' iniciou interação livre com o modelo.
+04/07/2026 21:44:03 | INFO | Serving on http://0.0.0.0:5000
+04/07/2026 21:44:32 | ERROR | [Zabbix] Falha de comunicação para o usuário 'admin': ERRO_ZABBIX: Token da API não configurado.
+04/07/2026 21:45:04 | INFO | [IA Oracle] Usuário 'armazem' iniciou interação livre com o modelo.
+04/07/2026 21:45:36 | INFO | [IA Oracle] Usuário 'armazem' iniciou interação livre com o modelo.
+04/07/2026 21:53:06 | INFO | Serving on http://0.0.0.0:5000
+04/07/2026 22:42:19 | INFO | [IA Oracle] Usuário 'armazem' iniciou interação livre com o modelo.
+04/07/2026 22:43:37 | INFO | [IA Oracle] Usuário 'armazem' iniciou interação livre com o modelo.
+04/07/2026 22:47:35 | INFO | [IA Oracle] Usuário 'armazem' iniciou interação livre com o modelo.
+04/07/2026 22:48:25 | INFO | [IA Oracle] Usuário 'armazem' iniciou interação livre com o modelo.
+05/07/2026 09:13:54 | INFO | [IA Oracle] Usuário 'armazem' iniciou interação livre com o modelo.
+06/07/2026 09:03:04 | WARNING | [SecOps AUDIT] 🚨 Usuário 'armazem' (Perfil: ADMINISTRADOR) INICIOU scan profundo no alvo: apl07.excia.com.br.
+06/07/2026 09:03:04 | INFO | [SecOps] Varredura Progressiva em apl07.excia.com.br
+06/07/2026 09:52:06 | WARNING | Task queue depth is 1
+06/07/2026 10:55:26 | INFO | Serving on http://0.0.0.0:5000

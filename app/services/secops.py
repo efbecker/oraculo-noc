@@ -43,12 +43,13 @@ def init_scan_db():
                 owner TEXT
             )
         ''')
-        # Garante a coluna 'owner' mesmo em bancos criados por versões antigas,
-        # para podermos isolar os scans por usuário (multi-tenant).
+        # Garante colunas novas mesmo em bancos criados por versões antigas.
         try:
             cols = [r[1] for r in conn.execute("PRAGMA table_info(scans)").fetchall()]
             if "owner" not in cols:
                 conn.execute("ALTER TABLE scans ADD COLUMN owner TEXT")
+            if "session_id" not in cols:
+                conn.execute("ALTER TABLE scans ADD COLUMN session_id TEXT")
         except Exception:
             pass
         # WAL + busy_timeout reduzem drasticamente os erros "database is locked"
@@ -119,7 +120,7 @@ def update_scan_progress(scan_id, progress, stage, status="running", result_json
         # Antes era 'pass' silencioso: um lock aqui derrubava a barra sem deixar rastro.
         logger.warning(f"[SecOps] Falha ao atualizar progresso do scan {scan_id}: {e}")
 
-def start_scan_thread(target, username, tts_enabled=False):
+def start_scan_thread(target, username, tts_enabled=False, session_id=None):
     # --- Defesa em profundidade: reforça a regra admin-only na própria camada
     #     do SecOps, independente de quem chamou. Fonte única da verdade em ai_engine. ---
     try:
@@ -138,8 +139,8 @@ def start_scan_thread(target, username, tts_enabled=False):
     with sqlite3.connect(DB_PATH, timeout=20) as conn:
         conn.execute("PRAGMA busy_timeout=15000")
         conn.execute(
-            "INSERT INTO scans (id, target, progress, stage, status, owner) VALUES (?, ?, 0, 'Inicializando...', 'running', ?)",
-            (scan_id, target, username)
+            "INSERT INTO scans (id, target, progress, stage, status, owner, session_id) VALUES (?, ?, 0, 'Inicializando...', 'running', ?, ?)",
+            (scan_id, target, username, session_id)
         )
         conn.commit()
 
@@ -319,8 +320,8 @@ def start_scan_thread(target, username, tts_enabled=False):
             with sqlite3.connect(DB_PATH, timeout=20) as conn:
                 conn.execute("PRAGMA busy_timeout=15000")
                 conn.execute(
-                    "INSERT INTO chat_history (username, sender, content, is_html, timestamp) VALUES (?, 'bot', ?, 0, ?)",
-                    (username, resultado_final, now_str)
+                    "INSERT INTO chat_history (username, sender, content, is_html, timestamp, session_id) VALUES (?, 'bot', ?, 0, ?, ?)",
+                    (username, resultado_final, now_str, session_id)
                 )
                 conn.commit()
         except Exception as e:

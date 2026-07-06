@@ -117,7 +117,7 @@ def exec_chat_with_oracle(prompt, username="admin", context="", chat_history_row
         logger.error(f"[IA Oracle] Erro para o usuário '{username}': {str(e)}")
         return f"⚠️ **Falha de IA (Oracle OCI):**\nO Zabbix enviou os dados, mas a IA recusou a conexão.\nErro: `{str(e)}`"
 
-def process_oraculo_message(message, username, token_zabbix, grupo_cliente, tts_enabled=False, history_rows=None, zabbix_url=None):
+def process_oraculo_message(message, username, token_zabbix, grupo_cliente, tts_enabled=False, history_rows=None, zabbix_url=None, session_id=None):
     if not zabbix_url: zabbix_url = get_user_zabbix_url(username)
     
     msg_l = message.lower()
@@ -150,7 +150,7 @@ def process_oraculo_message(message, username, token_zabbix, grupo_cliente, tts_
             def _gerar():
                 return gerar_grafico_zabbix(target, metrica, dias, token_zabbix, zabbix_url)
 
-        job_id = start_report_job(username, label, _gerar)
+        job_id = start_report_job(username, label, _gerar, session_id=session_id)
         if not job_id:
             return {"reply": "⚠️ Não foi possível iniciar o relatório. Tente novamente.", "audio_path": None, "is_html": 0}
 
@@ -175,7 +175,7 @@ def process_oraculo_message(message, username, token_zabbix, grupo_cliente, tts_
         # LOG CRÍTICO DE AUDITORIA
         logger.warning(f"[SecOps AUDIT] 🚨 Usuário '{username}' (Perfil: {perfil}) INICIOU scan profundo no alvo: {target}.")
         
-        scan_id = start_scan_thread(target, username, tts_enabled)
+        scan_id = start_scan_thread(target, username, tts_enabled, session_id=session_id)
         if not scan_id:
             return {
                 "reply": "🛡️ **Acesso negado.**\nA varredura de segurança (Nmap) é restrita a **administradores**.",
