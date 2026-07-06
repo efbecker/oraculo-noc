@@ -33,6 +33,10 @@ def create_app():
     init_db()
     os.makedirs(app.static_folder, exist_ok=True)
 
+    # Agendador de backup (thread em background, uma vez por processo)
+    from app.services import backup_manager
+    backup_manager.start_scheduler()
+
     # REGISTRO DOS BLUEPRINTS (A MÁGICA ACONTECE AQUI) ===
     from app.routes import auth, chat, admin, voice
     app.register_blueprint(auth.bp)

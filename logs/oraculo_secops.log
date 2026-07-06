@@ -119,3 +119,7 @@
 06/07/2026 15:28:52 | INFO | [IA Oracle] Usuário 'pollux' iniciou interação livre com o modelo.
 06/07/2026 15:33:32 | WARNING | [SecOps AUDIT] 🚨 Usuário 'armazem' (Perfil: ADMINISTRADOR) INICIOU scan profundo no alvo: colegiobonja.com.br.
 06/07/2026 15:33:32 | INFO | [SecOps] Varredura Progressiva em colegiobonja.com.br
+06/07/2026 15:53:16 | INFO | [Relatório] Usuário 'asv' solicitou relatório FinOps/Consumo para alvo: TODOS (30.0 dias).
+06/07/2026 16:15:38 | INFO | [Relatório] Usuário 'asv' solicitou relatório FinOps/Consumo para alvo: TODOS (30.0 dias).
+06/07/2026 16:21:41 | INFO | [Relatório] Usuário 'asv' solicitou relatório FinOps/Consumo para alvo: TODOS (30.0 dias).
+06/07/2026 16:48:54 | INFO | Serving on http://0.0.0.0:5000

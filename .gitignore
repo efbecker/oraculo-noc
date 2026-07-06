@@ -13,3 +13,6 @@ app/static/*.mp3
 
 # Ignorar arquivos de configuração com senhas reais!
 config.py
+
+# Ignorar configs e backups gerados em runtime (senha do Postgres, dumps do banco)
+instance/
