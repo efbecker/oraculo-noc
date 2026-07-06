@@ -1,8 +1,7 @@
-import sqlite3
 from functools import wraps
 from flask import Blueprint, request, jsonify, session, redirect, url_for, render_template
 from werkzeug.security import generate_password_hash, check_password_hash
-from config import DB_PATH
+from app import db
 
 bp = Blueprint('auth', __name__)
 
@@ -34,43 +33,41 @@ def login():
         username = data.get("username")
         password = data.get("password")
         try:
-            with sqlite3.connect(DB_PATH, timeout=15) as conn:
-                c = conn.cursor()
-                # 1. CORREÇÃO: Buscando as colunas REAIS do banco novo Multi-Tenant
-                c.execute("SELECT id, password, profile, token_zabbix, grupo_cliente, zabbix_url, ai_model FROM users WHERE username=?", (username,))
-                user = c.fetchone()
+            user = db.query_one(
+                "SELECT id, password, profile, token_zabbix, grupo_cliente, zabbix_url, ai_model FROM users WHERE username=?",
+                (username,)
+            )
 
-                auth_ok = False
-                if user and password:
-                    stored = user[1] or ""
-                    if _is_hashed(stored):
-                        # Senha já protegida: verificação criptográfica (scrypt/pbkdf2/argon2).
+            auth_ok = False
+            if user and password:
+                stored = user['password'] or ""
+                if _is_hashed(stored):
+                    # Senha já protegida: verificação criptográfica (scrypt/pbkdf2/argon2).
+                    try:
+                        auth_ok = check_password_hash(stored, password)
+                    except Exception:
+                        auth_ok = False
+                else:
+                    # LEGADO em texto puro: valida uma única vez e migra para hash
+                    # imediatamente, para não trancar ninguém durante a transição.
+                    # >>> Depois de migrar toda a base, este 'else' pode ser removido. <<<
+                    if stored and stored == password:
+                        auth_ok = True
                         try:
-                            auth_ok = check_password_hash(stored, password)
+                            db.execute("UPDATE users SET password=? WHERE id=?",
+                                       (generate_password_hash(password), user['id']))
                         except Exception:
-                            auth_ok = False
-                    else:
-                        # LEGADO em texto puro: valida uma única vez e migra para hash
-                        # imediatamente, para não trancar ninguém durante a transição.
-                        # >>> Depois de migrar toda a base, este 'else' pode ser removido. <<<
-                        if stored and stored == password:
-                            auth_ok = True
-                            try:
-                                conn.execute("UPDATE users SET password=? WHERE id=?",
-                                             (generate_password_hash(password), user[0]))
-                                conn.commit()
-                            except Exception:
-                                pass
+                            pass
 
-                if auth_ok:
-                    session['user_id'] = user[0]
-                    session['username'] = username
-                    session['profile'] = user[2]
-                    session['token_zabbix'] = user[3]
-                    session['grupo_cliente'] = user[4]
-                    session['zabbix_url'] = user[5]
-                    session['ai_model'] = user[6]
-                    return jsonify({"status": "ok"})
+            if auth_ok:
+                session['user_id'] = user['id']
+                session['username'] = username
+                session['profile'] = user['profile']
+                session['token_zabbix'] = user['token_zabbix']
+                session['grupo_cliente'] = user['grupo_cliente']
+                session['zabbix_url'] = user['zabbix_url']
+                session['ai_model'] = user['ai_model']
+                return jsonify({"status": "ok"})
             return jsonify({"error": "Credenciais inválidas"}), 401
         except Exception as e:
             return jsonify({"error": str(e)}), 500
@@ -91,9 +88,7 @@ def change_my_password():
         return jsonify({"error": "Senha muito curta."}), 400
     try:
         hashed_pw = generate_password_hash(new_password)
-        with sqlite3.connect(DB_PATH, timeout=15) as conn:
-            conn.execute("UPDATE users SET password = ? WHERE id = ?", (hashed_pw, session['user_id']))
-            conn.commit()
+        db.execute("UPDATE users SET password = ? WHERE id = ?", (hashed_pw, session['user_id']))
         return jsonify({"status": "success"})
     except Exception as e: 
         return jsonify({"error": str(e)}), 500

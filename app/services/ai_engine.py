@@ -1,11 +1,11 @@
 import os
 import re
 import json
-import sqlite3
 import logging
 import oci
 from datetime import datetime
-from config import OCI_ENDPOINT, OCI_COMPARTMENT_ID, DB_PATH
+from config import OCI_ENDPOINT, OCI_COMPARTMENT_ID
+from app import db
 from app.services.secops import start_scan_thread
 from app.services.report_jobs import start_report_job, FIRST_STAGE as REPORT_FIRST_STAGE
 from app.services.zabbix import (
@@ -32,20 +32,14 @@ logger = logging.getLogger('Oraculo')
 
 def get_user_model(username):
     try:
-        with sqlite3.connect(DB_PATH, timeout=15) as conn:
-            c = conn.cursor()
-            c.execute("SELECT ai_model FROM users WHERE username=?", (username,))
-            row = c.fetchone()
-            return row[0] if (row and row[0]) else "cohere.command-r-08-2024"
+        row = db.query_one("SELECT ai_model FROM users WHERE username=?", (username,))
+        return row['ai_model'] if (row and row['ai_model']) else "cohere.command-r-08-2024"
     except: return "cohere.command-r-08-2024"
 
 def get_user_profile(username):
     try:
-        with sqlite3.connect(DB_PATH, timeout=15) as conn:
-            c = conn.cursor()
-            c.execute("SELECT profile FROM users WHERE username=?", (username,))
-            row = c.fetchone()
-            return str(row[0]).upper().strip() if (row and row[0]) else "CLIENTE"
+        row = db.query_one("SELECT profile FROM users WHERE username=?", (username,))
+        return str(row['profile']).upper().strip() if (row and row['profile']) else "CLIENTE"
     except: return "CLIENTE"
 
 # ==========================================================================
@@ -62,11 +56,8 @@ def perfil_pode_escanear(perfil):
 
 def get_user_zabbix_url(username):
     try:
-        with sqlite3.connect(DB_PATH, timeout=15) as conn:
-            c = conn.cursor()
-            c.execute("SELECT zabbix_url FROM users WHERE username=?", (username,))
-            row = c.fetchone()
-            return str(row[0]).strip() if (row and row[0]) else None
+        row = db.query_one("SELECT zabbix_url FROM users WHERE username=?", (username,))
+        return str(row['zabbix_url']).strip() if (row and row['zabbix_url']) else None
     except: return None
 
 def obter_contexto_zabbix_real_time(token, grupo, url=None):

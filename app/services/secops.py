@@ -1,6 +1,5 @@
 import threading
 import subprocess
-import sqlite3
 import logging
 import uuid
 import tempfile
@@ -10,7 +9,7 @@ import json
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime
-from config import DB_PATH
+from app import db
 
 logger = logging.getLogger('Oraculo')
 
@@ -31,34 +30,10 @@ PHASES = {
 }
 
 def init_scan_db():
-    with sqlite3.connect(DB_PATH, timeout=15) as conn:
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS scans (
-                id TEXT PRIMARY KEY,
-                target TEXT,
-                progress REAL DEFAULT 0,
-                stage TEXT,
-                status TEXT,
-                result_json TEXT,
-                owner TEXT
-            )
-        ''')
-        # Garante colunas novas mesmo em bancos criados por versões antigas.
-        try:
-            cols = [r[1] for r in conn.execute("PRAGMA table_info(scans)").fetchall()]
-            if "owner" not in cols:
-                conn.execute("ALTER TABLE scans ADD COLUMN owner TEXT")
-            if "session_id" not in cols:
-                conn.execute("ALTER TABLE scans ADD COLUMN session_id TEXT")
-        except Exception:
-            pass
-        # WAL + busy_timeout reduzem drasticamente os erros "database is locked"
-        # quando o thread do scan e as requisições web tocam o SQLite ao mesmo tempo.
-        try:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA busy_timeout=15000")
-        except Exception:
-            pass
+    # O schema (tabela 'scans' e colunas owner/session_id) já é criado de forma
+    # portável (SQLite/PostgreSQL) por db.init_schema(). Mantido como função para
+    # não quebrar quem já chama init_scan_db() em outros pontos do código.
+    db.init_schema()
 init_scan_db()
 
 def parse_nmap_xml_file(file_path):
@@ -103,19 +78,16 @@ def extract_cves(scan_data):
 
 def update_scan_progress(scan_id, progress, stage, status="running", result_json=None):
     try:
-        with sqlite3.connect(DB_PATH, timeout=20) as conn:
-            conn.execute("PRAGMA busy_timeout=15000")
-            if result_json is not None:
-                conn.execute(
-                    "UPDATE scans SET progress=?, stage=?, status=?, result_json=? WHERE id=?",
-                    (progress, stage, status, json.dumps(result_json), scan_id)
-                )
-            else:
-                conn.execute(
-                    "UPDATE scans SET progress=?, stage=?, status=? WHERE id=?",
-                    (progress, stage, status, scan_id)
-                )
-            conn.commit()
+        if result_json is not None:
+            db.execute(
+                "UPDATE scans SET progress=?, stage=?, status=?, result_json=? WHERE id=?",
+                (progress, stage, status, json.dumps(result_json), scan_id)
+            )
+        else:
+            db.execute(
+                "UPDATE scans SET progress=?, stage=?, status=? WHERE id=?",
+                (progress, stage, status, scan_id)
+            )
     except Exception as e:
         # Antes era 'pass' silencioso: um lock aqui derrubava a barra sem deixar rastro.
         logger.warning(f"[SecOps] Falha ao atualizar progresso do scan {scan_id}: {e}")
@@ -136,13 +108,10 @@ def start_scan_thread(target, username, tts_enabled=False, session_id=None):
 
     scan_id = str(uuid.uuid4())
 
-    with sqlite3.connect(DB_PATH, timeout=20) as conn:
-        conn.execute("PRAGMA busy_timeout=15000")
-        conn.execute(
-            "INSERT INTO scans (id, target, progress, stage, status, owner, session_id) VALUES (?, ?, 0, 'Inicializando...', 'running', ?, ?)",
-            (scan_id, target, username, session_id)
-        )
-        conn.commit()
+    db.execute(
+        "INSERT INTO scans (id, target, progress, stage, status, owner, session_id) VALUES (?, ?, 0, 'Inicializando...', 'running', ?, ?)",
+        (scan_id, target, username, session_id)
+    )
 
     def run_scan():
         from app.services.ai_engine import exec_chat_with_oracle
@@ -317,13 +286,10 @@ def start_scan_thread(target, username, tts_enabled=False, session_id=None):
         # 1) Primeiro grava a mensagem no histórico do usuário.
         now_str = datetime.now().strftime("%d/%m/%Y %H:%M")
         try:
-            with sqlite3.connect(DB_PATH, timeout=20) as conn:
-                conn.execute("PRAGMA busy_timeout=15000")
-                conn.execute(
-                    "INSERT INTO chat_history (username, sender, content, is_html, timestamp, session_id) VALUES (?, 'bot', ?, 0, ?, ?)",
-                    (username, resultado_final, now_str, session_id)
-                )
-                conn.commit()
+            db.execute(
+                "INSERT INTO chat_history (username, sender, content, is_html, timestamp, session_id) VALUES (?, 'bot', ?, 0, ?, ?)",
+                (username, resultado_final, now_str, session_id)
+            )
         except Exception as e:
             logger.error(f"[SecOps] Erro ao gravar relatório no chat: {e}")
 

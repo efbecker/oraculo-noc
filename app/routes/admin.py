@@ -1,8 +1,7 @@
-import sqlite3
 import secrets
 from werkzeug.security import generate_password_hash
 from flask import Blueprint, request, redirect, url_for, session, render_template_string
-from config import DB_PATH
+from app import db
 
 bp = Blueprint('admin', __name__)
 
@@ -119,16 +118,16 @@ HTML_TEMPLATE = """
                 <tbody>
                     {% for u in users %}
                     <tr>
-                        <td>{{ u[0] }}</td>
-                        <td><strong>{{ u[1] }}</strong></td>
-                        <td>{{ u[3] }}</td>
-                        <td><span style="color:#ff9e00; font-family: monospace;">{{ u[4] }}</span></td>
-                        <td><span style="color:#00e5ff; font-family: monospace; font-size: 13px;">{{ u[7] }}</span></td>
-                        <td><span style="color:#00e676; font-size: 12px;">{{ u[6] if u[6] else '🌍 Padrão Global (config.py)' }}</span></td>
+                        <td>{{ u.id }}</td>
+                        <td><strong>{{ u.username }}</strong></td>
+                        <td>{{ u.profile }}</td>
+                        <td><span style="color:#ff9e00; font-family: monospace;">{{ u.grupo_cliente }}</span></td>
+                        <td><span style="color:#00e5ff; font-family: monospace; font-size: 13px;">{{ u.ai_model }}</span></td>
+                        <td><span style="color:#00e676; font-size: 12px;">{{ u.zabbix_url if u.zabbix_url else '🌍 Padrão Global (config.py)' }}</span></td>
                         <td class="actions-cell">
-                            <button type="button" class="btn-edit" onclick="editarUsuario('{{ u[1] }}', '{{ u[3] }}', '{{ u[4] }}', '{{ u[7] }}', '{{ u[6] }}', '{{ u[5] }}')">Editar</button>
+                            <button type="button" class="btn-edit" onclick="editarUsuario('{{ u.username }}', '{{ u.profile }}', '{{ u.grupo_cliente }}', '{{ u.ai_model }}', '{{ u.zabbix_url }}', '{{ u.token_zabbix }}')">Editar</button>
                             <form method="POST" action="/admin/delete" style="margin: 0;" onsubmit="return confirm('Deseja excluir este usuário?');">
-                                <input type="hidden" name="id" value="{{ u[0] }}">
+                                <input type="hidden" name="id" value="{{ u.id }}">
                                 <button type="submit" class="btn-danger">Excluir</button>
                             </form>
                         </td>
@@ -163,11 +162,7 @@ HTML_TEMPLATE = """
 def index():
     if session.get('profile') not in ['ADMIN', 'ADMINISTRADOR']:
         return "Acesso Negado.", 403
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT id, username, password, profile, grupo_cliente, token_zabbix, zabbix_url, ai_model FROM users")
-    users = c.fetchall()
-    conn.close()
+    users = db.query_all("SELECT id, username, password, profile, grupo_cliente, token_zabbix, zabbix_url, ai_model FROM users")
     return render_template_string(HTML_TEMPLATE, users=users)
 
 @bp.route('/admin/save', methods=['POST'])
@@ -183,10 +178,7 @@ def save_user():
     zabbix_url = request.form.get('zabbix_url').strip()
     ai_model = request.form.get('ai_model').strip()
     
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT id FROM users WHERE username=?", (username,))
-    user = c.fetchone()
+    user = db.query_one("SELECT id FROM users WHERE username=?", (username,))
     
     if user:
         query = "UPDATE users SET profile=?, grupo_cliente=?, zabbix_url=?, ai_model=?"
@@ -199,7 +191,7 @@ def save_user():
             params.append(token_zabbix)
         query += " WHERE username=?"
         params.append(username)
-        c.execute(query, tuple(params))
+        db.execute(query, tuple(params))
     else:
         # Na criação: se vier senha, hasheia; se vier vazia, gera um hash aleatório
         # (conta fica sem login até definir a senha) — nunca armazena texto puro.
@@ -207,10 +199,10 @@ def save_user():
             senha_hash = generate_password_hash(password)
         else:
             senha_hash = generate_password_hash(secrets.token_urlsafe(24))
-        c.execute("INSERT INTO users (username, password, profile, grupo_cliente, token_zabbix, zabbix_url, ai_model) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                  (username, senha_hash, profile, grupo_cliente, token_zabbix, zabbix_url, ai_model))
-    conn.commit()
-    conn.close()
+        db.execute(
+            "INSERT INTO users (username, password, profile, grupo_cliente, token_zabbix, zabbix_url, ai_model) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (username, senha_hash, profile, grupo_cliente, token_zabbix, zabbix_url, ai_model)
+        )
     return redirect(request.referrer or url_for('admin.index'))
 
 @bp.route('/admin/delete', methods=['POST'])
@@ -219,9 +211,5 @@ def delete_user():
     if session.get('profile') not in ['ADMIN', 'ADMINISTRADOR']:
         return "Acesso Negado.", 403
     user_id = request.form.get('id')
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("DELETE FROM users WHERE id=?", (user_id,))
-    conn.commit()
-    conn.close()
+    db.execute("DELETE FROM users WHERE id=?", (user_id,))
     return redirect(request.referrer or url_for('admin.index'))

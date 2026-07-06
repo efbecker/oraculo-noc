@@ -1,76 +1,28 @@
 import os
-import sqlite3
 from flask import Flask
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash
-from config import DB_PATH, SECRET_KEY
+from config import SECRET_KEY
+from app import db
 
 def init_db():
-    with sqlite3.connect(DB_PATH, timeout=15) as conn:
-        # Tabela de Usuários Unificada (SecOps + Zabbix)
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT UNIQUE NOT NULL,
-                password TEXT NOT NULL,
-                role TEXT DEFAULT 'user',
-                zabbix_token TEXT,
-                client_group TEXT,
-                ai_provider TEXT DEFAULT 'oci',
-                ai_api_key TEXT,
-                ai_model TEXT DEFAULT 'cohere.command-r-16k'
-            )
-        ''')
-        
-        # Histórico de Chat e Áudio
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS chat_messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT,
-                sender TEXT,
-                content TEXT,
-                is_html INTEGER DEFAULT 0,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                audio_path TEXT
-            )
-        ''')
-        
-        # Testes de Penetração (Vuln::Hunter)
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS scans (
-                id TEXT PRIMARY KEY,
-                timestamp TEXT,
-                target TEXT,
-                mode TEXT,
-                status TEXT,
-                progress REAL DEFAULT 0,
-                stage TEXT,
-                result_json TEXT,
-                owner TEXT DEFAULT 'admin'
-            )
-        ''')
-        
-        # Configurações Globais
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS settings (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                oci_model_id TEXT DEFAULT 'cohere.command-r-16k'
-            )
-        ''')
-        
-        # Cria o usuário Admin padrão se não existir
-        c = conn.cursor()
-        c.execute("SELECT id FROM users WHERE username='admin'")
-        if not c.fetchone():
-            hashed_pw = generate_password_hash('admin123')
-            conn.execute(
-                "INSERT INTO users (username, password, role, zabbix_token, client_group, ai_provider, ai_model) VALUES (?, ?, ?, ?, ?, ?, ?)", 
-                ('admin', hashed_pw, 'admin', '', 'GLOBAL', 'oci', 'cohere.command-r-16k')
-            )
-        
-        # Reseta scans travados caso o servidor tenha reiniciado
-        conn.execute("UPDATE scans SET status='error', stage='Interrompido (Reboot)' WHERE status='running'")
-        conn.commit()
+    # Schema único e portável (SQLite/PostgreSQL) vem de app/db.py. Antes, esta
+    # função criava um schema ANTIGO e divergente (role/zabbix_token/client_group/
+    # chat_messages) que não batia com o schema real usado pelo resto do app
+    # (profile/token_zabbix/grupo_cliente/chat_history). Unificado aqui.
+    db.init_schema()
+
+    # Cria o usuário Admin padrão se não existir nenhum usuário ainda.
+    row = db.query_one("SELECT id FROM users WHERE username=?", ("admin",))
+    if not row:
+        hashed_pw = generate_password_hash("admin123")
+        db.execute(
+            "INSERT INTO users (username, password, profile, grupo_cliente, ai_model) VALUES (?, ?, ?, ?, ?)",
+            ("admin", hashed_pw, "ADMINISTRADOR", "GLOBAL", "cohere.command-r-08-2024")
+        )
+
+    # Reseta scans travados caso o servidor tenha reiniciado com um scan em andamento.
+    db.execute("UPDATE scans SET status='error', stage='Interrompido (Reboot)' WHERE status='running'")
 
 def create_app():
     app = Flask(__name__, static_folder='static', static_url_path='/static')
@@ -82,9 +34,10 @@ def create_app():
     os.makedirs(app.static_folder, exist_ok=True)
 
     # REGISTRO DOS BLUEPRINTS (A MÁGICA ACONTECE AQUI) ===
-    from app.routes import auth, chat, admin
+    from app.routes import auth, chat, admin, voice
     app.register_blueprint(auth.bp)
     app.register_blueprint(chat.bp)
     app.register_blueprint(admin.bp)
+    app.register_blueprint(voice.bp)
 
     return app

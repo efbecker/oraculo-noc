@@ -6,12 +6,11 @@ Importante: NÃO altera o formato do relatório. A função geradora (do zabbix.
 é chamada intacta; aqui apenas orquestramos o progresso e a entrega no chat.
 """
 import threading
-import sqlite3
 import uuid
 import time
 import logging
 from datetime import datetime
-from config import DB_PATH
+from app import db
 from app.services.secops import update_scan_progress, init_scan_db
 
 logger = logging.getLogger('Oraculo')
@@ -63,13 +62,10 @@ def start_report_job(username, label, generator_fn, session_id=None):
     init_scan_db()  # garante a tabela 'scans' e as colunas 'owner'/'session_id'
     job_id = str(uuid.uuid4())
     try:
-        with sqlite3.connect(DB_PATH, timeout=20) as conn:
-            conn.execute("PRAGMA busy_timeout=15000")
-            conn.execute(
-                "INSERT INTO scans (id, target, progress, stage, status, owner, session_id) VALUES (?, ?, 0, ?, 'running', ?, ?)",
-                (job_id, label, FIRST_STAGE, username, session_id)
-            )
-            conn.commit()
+        db.execute(
+            "INSERT INTO scans (id, target, progress, stage, status, owner, session_id) VALUES (?, ?, 0, ?, 'running', ?, ?)",
+            (job_id, label, FIRST_STAGE, username, session_id)
+        )
     except Exception as e:
         logger.error(f"[Report] Falha ao criar job para '{username}': {e}")
         return None
@@ -117,13 +113,10 @@ def start_report_job(username, label, generator_fn, session_id=None):
         # Sucesso => o relatório é HTML (is_html=1) e mantém o formato original.
         is_html = 1 if final_status == "finished" else 0
         try:
-            with sqlite3.connect(DB_PATH, timeout=20) as conn:
-                conn.execute("PRAGMA busy_timeout=15000")
-                conn.execute(
-                    "INSERT INTO chat_history (username, sender, content, is_html, timestamp, session_id) VALUES (?, 'bot', ?, ?, ?, ?)",
-                    (username, reply_content, is_html, now_str, session_id)
-                )
-                conn.commit()
+            db.execute(
+                "INSERT INTO chat_history (username, sender, content, is_html, timestamp, session_id) VALUES (?, 'bot', ?, ?, ?, ?)",
+                (username, reply_content, is_html, now_str, session_id)
+            )
         except Exception as e:
             logger.error(f"[Report] Erro ao gravar relatório no chat: {e}")
 

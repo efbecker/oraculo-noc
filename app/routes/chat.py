@@ -1,88 +1,34 @@
-import sqlite3
 import uuid
-import time
+import json
+import re
 from datetime import datetime
-from flask import Blueprint, render_template, session, redirect, url_for, request, jsonify
+from flask import Blueprint, render_template, session, redirect, url_for, request, jsonify, Response
 from app.routes.auth import login_required
 from app.services.ai_engine import process_oraculo_message
-from config import DB_PATH
+from app import db
 
 bp = Blueprint('chat', __name__)
 
 
-def ensure_chat_schema():
-    """Cria a tabela de sessões e garante a coluna session_id em chat_history e
-    scans. Faz o backfill das mensagens antigas (sem sessão) para uma sessão
-    'legado' por usuário, preservando as conversas atuais. Idempotente."""
-    try:
-        with sqlite3.connect(DB_PATH, timeout=15) as conn:
-            conn.execute("PRAGMA busy_timeout=15000")
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS chat_sessions (
-                    id TEXT PRIMARY KEY,
-                    username TEXT,
-                    created_at TEXT,
-                    created_ts REAL
-                )
-            """)
-            # coluna session_id em chat_history
-            cols = [r[1] for r in conn.execute("PRAGMA table_info(chat_history)").fetchall()]
-            if "session_id" not in cols:
-                try: conn.execute("ALTER TABLE chat_history ADD COLUMN session_id TEXT")
-                except Exception: pass
-            # coluna session_id em scans (para o widget aparecer na sessão certa)
-            try:
-                scols = [r[1] for r in conn.execute("PRAGMA table_info(scans)").fetchall()]
-                if scols and "session_id" not in scols:
-                    conn.execute("ALTER TABLE scans ADD COLUMN session_id TEXT")
-            except Exception:
-                pass
-            # backfill: mensagens órfãs -> uma sessão por usuário
-            orfaos = [r[0] for r in conn.execute(
-                "SELECT DISTINCT username FROM chat_history WHERE session_id IS NULL OR session_id=''"
-            ).fetchall()]
-            for u in orfaos:
-                sid = str(uuid.uuid4())
-                row = conn.execute(
-                    "SELECT timestamp FROM chat_history WHERE username=? ORDER BY id ASC LIMIT 1", (u,)
-                ).fetchone()
-                created = row[0] if (row and row[0]) else datetime.now().strftime("%d/%m/%Y %H:%M")
-                conn.execute(
-                    "INSERT INTO chat_sessions (id, username, created_at, created_ts) VALUES (?, ?, ?, 0)",
-                    (sid, u, created)
-                )
-                conn.execute(
-                    "UPDATE chat_history SET session_id=? WHERE username=? AND (session_id IS NULL OR session_id='')",
-                    (sid, u)
-                )
-            conn.commit()
-    except Exception as e:
-        print(f"[chat] ensure_chat_schema erro: {e}")
-
-ensure_chat_schema()
-
-
 def _ensure_session(username, session_id):
-    """Devolve um session_id válido do usuário. Se vier vazio/ inválido, cria um novo."""
+    """Devolve um session_id válido do usuário. Se vier vazio/inválido, cria um novo."""
     try:
-        with sqlite3.connect(DB_PATH, timeout=15) as conn:
-            conn.execute("PRAGMA busy_timeout=15000")
-            if session_id:
-                row = conn.execute(
-                    "SELECT id FROM chat_sessions WHERE id=? AND username=?", (session_id, username)
-                ).fetchone()
-                if row:
-                    return session_id
-            sid = str(uuid.uuid4())
-            now = datetime.now()
-            conn.execute(
-                "INSERT INTO chat_sessions (id, username, created_at, created_ts) VALUES (?, ?, ?, ?)",
-                (sid, username, now.strftime("%d/%m/%Y %H:%M"), now.timestamp())
+        if session_id:
+            row = db.query_one(
+                "SELECT id FROM chat_sessions WHERE id=? AND username=?", (session_id, username)
             )
-            conn.commit()
-            return sid
+            if row:
+                return session_id
+        sid = str(uuid.uuid4())
+        now = datetime.now()
+        db.execute(
+            "INSERT INTO chat_sessions (id, username, created_at, created_ts) VALUES (?, ?, ?, ?)",
+            (sid, username, now.strftime("%d/%m/%Y %H:%M"), now.timestamp())
+        )
+        return sid
     except Exception:
         return session_id or str(uuid.uuid4())
+
 
 @bp.route("/")
 @bp.route("/chat")
@@ -112,30 +58,27 @@ def send_message():
     grupo_cliente = ""
     zabbix_url = ""
     try:
-        with sqlite3.connect(DB_PATH, timeout=15) as conn:
-            conn.row_factory = sqlite3.Row
-            c = conn.cursor()
-            c.execute("SELECT token_zabbix, grupo_cliente, zabbix_url FROM users WHERE username=?", (username,))
-            row = c.fetchone()
-            if row:
-                token_zabbix = row['token_zabbix']
-                grupo_cliente = row['grupo_cliente']
-                zabbix_url = row['zabbix_url']
+        row = db.query_one("SELECT token_zabbix, grupo_cliente, zabbix_url FROM users WHERE username=?", (username,))
+        if row:
+            token_zabbix = row['token_zabbix']
+            grupo_cliente = row['grupo_cliente']
+            zabbix_url = row['zabbix_url']
     except Exception as e: 
         return jsonify({"error": f"Erro credenciais: {str(e)}"}), 500
 
     chat_history_rows = []
     try:
-        with sqlite3.connect(DB_PATH, timeout=15) as conn:
-            conn.row_factory = sqlite3.Row
-            # Salva a mensagem do usuário com a DATA/HORA
-            conn.execute("INSERT INTO chat_history (username, sender, content, is_html, timestamp, session_id) VALUES (?, 'user', ?, 0, ?, ?)", (username, message, now_str, session_id))
-            
-            c = conn.cursor()
-            c.execute("SELECT sender, content, is_html FROM chat_history WHERE username=? AND session_id=? ORDER BY id DESC LIMIT 10", (username, session_id))
-            chat_history_rows = list(c.fetchall())
-            chat_history_rows.reverse()
-            conn.commit()
+        # Salva a mensagem do usuário com a DATA/HORA
+        db.execute(
+            "INSERT INTO chat_history (username, sender, content, is_html, timestamp, session_id) VALUES (?, 'user', ?, 0, ?, ?)",
+            (username, message, now_str, session_id)
+        )
+        rows = db.query_all(
+            "SELECT sender, content, is_html FROM chat_history WHERE username=? AND session_id=? ORDER BY id DESC LIMIT 10",
+            (username, session_id)
+        )
+        chat_history_rows = list(rows)
+        chat_history_rows.reverse()
     except Exception as e: 
         return jsonify({"error": f"Erro histórico: {str(e)}"}), 500
 
@@ -149,11 +92,13 @@ def send_message():
     bot_time = datetime.now().strftime("%d/%m/%Y %H:%M")
 
     try:
-        with sqlite3.connect(DB_PATH, timeout=15) as conn:
-            # Salva a resposta da IA na MESMA sessão
-            conn.execute("INSERT INTO chat_history (username, sender, content, is_html, timestamp, session_id) VALUES (?, 'bot', ?, ?, ?, ?)", (username, reply, is_html, bot_time, session_id))
-            conn.commit()
-    except: pass
+        # Salva a resposta da IA na MESMA sessão
+        db.execute(
+            "INSERT INTO chat_history (username, sender, content, is_html, timestamp, session_id) VALUES (?, 'bot', ?, ?, ?, ?)",
+            (username, reply, is_html, bot_time, session_id)
+        )
+    except Exception:
+        pass
 
     res["timestamp"] = bot_time
     res["session_id"] = session_id
@@ -165,15 +110,17 @@ def get_history():
     username = session.get('username')
     session_id = request.args.get("session_id")
     try:
-        with sqlite3.connect(DB_PATH, timeout=15) as conn:
-            conn.row_factory = sqlite3.Row
-            c = conn.cursor()
-            if session_id:
-                c.execute("SELECT sender, content, is_html, timestamp FROM chat_history WHERE username=? AND session_id=? ORDER BY id ASC LIMIT 200", (username, session_id))
-            else:
-                c.execute("SELECT sender, content, is_html, timestamp FROM chat_history WHERE username=? ORDER BY id ASC LIMIT 200", (username,))
-            rows = c.fetchall()
-            return jsonify([{"sender": r['sender'], "content": r['content'], "is_html": r['is_html'], "timestamp": r['timestamp'] if r['timestamp'] else ""} for r in rows])
+        if session_id:
+            rows = db.query_all(
+                "SELECT sender, content, is_html, timestamp FROM chat_history WHERE username=? AND session_id=? ORDER BY id ASC LIMIT 200",
+                (username, session_id)
+            )
+        else:
+            rows = db.query_all(
+                "SELECT sender, content, is_html, timestamp FROM chat_history WHERE username=? ORDER BY id ASC LIMIT 200",
+                (username,)
+            )
+        return jsonify([{"sender": r['sender'], "content": r['content'], "is_html": r['is_html'], "timestamp": r['timestamp'] if r['timestamp'] else ""} for r in rows])
     except Exception as e: return jsonify({"error": str(e)}), 500
 
 @bp.route("/api/chat/sessions", methods=["GET"])
@@ -181,13 +128,13 @@ def get_history():
 def list_sessions():
     username = session.get('username')
     try:
-        with sqlite3.connect(DB_PATH, timeout=15) as conn:
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                "SELECT id, created_at FROM chat_sessions WHERE username=? ORDER BY created_ts DESC, rowid DESC",
-                (username,)
-            ).fetchall()
-            return jsonify([{"id": r["id"], "created_at": r["created_at"] or ""} for r in rows])
+        # Ordena só por created_ts (epoch com microssegundos): não depende de
+        # rowid implícito do SQLite, que não existe no PostgreSQL.
+        rows = db.query_all(
+            "SELECT id, created_at FROM chat_sessions WHERE username=? ORDER BY created_ts DESC",
+            (username,)
+        )
+        return jsonify([{"id": r["id"], "created_at": r["created_at"] or ""} for r in rows])
     except Exception as e: return jsonify({"error": str(e)}), 500
 
 @bp.route("/api/chat/new", methods=["POST"])
@@ -198,13 +145,10 @@ def new_session():
     now = datetime.now()
     created_at = now.strftime("%d/%m/%Y %H:%M")
     try:
-        with sqlite3.connect(DB_PATH, timeout=15) as conn:
-            conn.execute("PRAGMA busy_timeout=15000")
-            conn.execute(
-                "INSERT INTO chat_sessions (id, username, created_at, created_ts) VALUES (?, ?, ?, ?)",
-                (sid, username, created_at, now.timestamp())
-            )
-            conn.commit()
+        db.execute(
+            "INSERT INTO chat_sessions (id, username, created_at, created_ts) VALUES (?, ?, ?, ?)",
+            (sid, username, created_at, now.timestamp())
+        )
         return jsonify({"id": sid, "created_at": created_at})
     except Exception as e: return jsonify({"error": str(e)}), 500
 
@@ -215,11 +159,8 @@ def delete_session():
     sid = (request.json or {}).get("id")
     if not sid: return jsonify({"error": "id ausente"}), 400
     try:
-        with sqlite3.connect(DB_PATH, timeout=15) as conn:
-            conn.execute("PRAGMA busy_timeout=15000")
-            conn.execute("DELETE FROM chat_history WHERE username=? AND session_id=?", (username, sid))
-            conn.execute("DELETE FROM chat_sessions WHERE username=? AND id=?", (username, sid))
-            conn.commit()
+        db.execute("DELETE FROM chat_history WHERE username=? AND session_id=?", (username, sid))
+        db.execute("DELETE FROM chat_sessions WHERE username=? AND id=?", (username, sid))
         return jsonify({"status": "deleted"})
     except Exception as e: return jsonify({"error": str(e)}), 500
 
@@ -228,10 +169,8 @@ def delete_session():
 def clear_history():
     username = session.get('username')
     try:
-        with sqlite3.connect(DB_PATH, timeout=15) as conn:
-            conn.execute("DELETE FROM chat_history WHERE username=?", (username,))
-            conn.execute("DELETE FROM chat_sessions WHERE username=?", (username,))
-            conn.commit()
+        db.execute("DELETE FROM chat_history WHERE username=?", (username,))
+        db.execute("DELETE FROM chat_sessions WHERE username=?", (username,))
         return jsonify({"status": "cleared"})
     except Exception as e: return jsonify({"error": str(e)}), 500
 
@@ -239,17 +178,13 @@ def clear_history():
 @login_required
 def get_active_scans():
     try:
-        import sqlite3
-        from config import DB_PATH
         username = session.get('username')
-        with sqlite3.connect(DB_PATH, timeout=15) as conn:
-            conn.row_factory = sqlite3.Row
-            # Isolamento multi-tenant: cada usuário só enxerga os SEUS scans em execução.
-            rows = conn.execute(
-                "SELECT id, target, progress, stage, session_id FROM scans WHERE status='running' AND owner=?",
-                (username,)
-            ).fetchall()
-            return jsonify([dict(r) for r in rows])
+        # Isolamento multi-tenant: cada usuário só enxerga os SEUS scans em execução.
+        rows = db.query_all(
+            "SELECT id, target, progress, stage, session_id FROM scans WHERE status='running' AND owner=?",
+            (username,)
+        )
+        return jsonify(rows)
     except Exception as e:
         return jsonify([])
 
@@ -257,55 +192,47 @@ def get_active_scans():
 @login_required
 def download_report(scan_id):
     try:
-        import sqlite3
-        from config import DB_PATH
-        import json
-        from flask import Response
-        import re
-        from datetime import datetime
-        
         username = session.get('username')
         profile = str(session.get('profile') or '').upper().strip()
-        with sqlite3.connect(DB_PATH, timeout=15) as conn:
-            row = conn.execute("SELECT target, result_json, owner FROM scans WHERE id = ?", (scan_id,)).fetchone()
-            if not row or not row[1]: return "Relatório não disponível.", 404
+        row = db.query_one("SELECT target, result_json, owner FROM scans WHERE id = ?", (scan_id,))
+        if not row or not row['result_json']: return "Relatório não disponível.", 404
 
-            # Só o dono do scan (ou um administrador) pode baixar o relatório.
-            owner = row[2]
-            if owner != username and profile not in ('ADMIN', 'ADMINISTRADOR'):
-                return "Acesso negado.", 403
+        # Só o dono do scan (ou um administrador) pode baixar o relatório.
+        owner = row['owner']
+        if owner != username and profile not in ('ADMIN', 'ADMINISTRADOR'):
+            return "Acesso negado.", 403
 
-            target = row[0]
-            ai_text = json.loads(row[1]).get("ai_analysis", "")
-            
-            # Transforma cada CVE-xxxx-xxxx em link clicável para o NVD (antes das demais conversões).
-            ai_text = re.sub(
-                r'\bCVE-\d{4}-\d{4,7}\b',
-                lambda m: f'<a href="https://nvd.nist.gov/vuln/detail/{m.group(0)}" target="_blank" style="color:#c0392b; font-weight:bold">{m.group(0)}</a>',
-                ai_text
-            )
-            html_content = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', ai_text)
-            html_content = re.sub(r'### (.*?)\n', r'<h3>\1</h3>\n', html_content)
-            html_content = re.sub(r'## (.*?)\n', r'<h2>\1</h2>\n', html_content)
-            html_content = re.sub(r'# (.*?)\n', r'<h1>\1</h1>\n', html_content)
-            html_content = re.sub(r'\[(.*?)\]\((.*?)\)', r'<a href="\2" target="_blank">\1</a>', html_content)
-            html_content = html_content.replace('\n', '<br>')
-            
-            html = f"""
-            <html><head><meta charset="UTF-8"><title>Relatório - {target}</title>
-            <style>body{{font-family:sans-serif; padding:40px; line-height:1.6; color:#333; max-width:900px; margin:auto}} h1, h2, h3{{color:#0077ff}} .code{{background:#f4f4f4; padding:20px; border-radius:8px}} a{{color:#2ea043; font-weight:bold}}</style>
-            </head><body>
-            <h1>Oráculo SecOps - Relatório Executivo</h1>
-            <hr><p><b>Alvo Auditado:</b> {target}<br><b>Data/Hora:</b> {datetime.now().strftime('%d/%m/%Y %H:%M')}</p>
-            <div class='code'>{html_content}</div>
-            <p style='text-align:center; font-size:0.8em; margin-top:50px'>Gerado por Oráculo Armazem Cloud</p>
-            </body></html>
-            """
-            
-            return Response(
-                html,
-                mimetype="text/html",
-                headers={"Content-disposition": f"attachment; filename=Relatorio_SecOps_{target}.html"}
-            )
+        target = row['target']
+        ai_text = json.loads(row['result_json']).get("ai_analysis", "")
+        
+        # Transforma cada CVE-xxxx-xxxx em link clicável para o NVD (antes das demais conversões).
+        ai_text = re.sub(
+            r'\bCVE-\d{4}-\d{4,7}\b',
+            lambda m: f'<a href="https://nvd.nist.gov/vuln/detail/{m.group(0)}" target="_blank" style="color:#c0392b; font-weight:bold">{m.group(0)}</a>',
+            ai_text
+        )
+        html_content = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', ai_text)
+        html_content = re.sub(r'### (.*?)\n', r'<h3>\1</h3>\n', html_content)
+        html_content = re.sub(r'## (.*?)\n', r'<h2>\1</h2>\n', html_content)
+        html_content = re.sub(r'# (.*?)\n', r'<h1>\1</h1>\n', html_content)
+        html_content = re.sub(r'\[(.*?)\]\((.*?)\)', r'<a href="\2" target="_blank">\1</a>', html_content)
+        html_content = html_content.replace('\n', '<br>')
+        
+        html = f"""
+        <html><head><meta charset="UTF-8"><title>Relatório - {target}</title>
+        <style>body{{font-family:sans-serif; padding:40px; line-height:1.6; color:#333; max-width:900px; margin:auto}} h1, h2, h3{{color:#0077ff}} .code{{background:#f4f4f4; padding:20px; border-radius:8px}} a{{color:#2ea043; font-weight:bold}}</style>
+        </head><body>
+        <h1>Oráculo SecOps - Relatório Executivo</h1>
+        <hr><p><b>Alvo Auditado:</b> {target}<br><b>Data/Hora:</b> {datetime.now().strftime('%d/%m/%Y %H:%M')}</p>
+        <div class='code'>{html_content}</div>
+        <p style='text-align:center; font-size:0.8em; margin-top:50px'>Gerado por Oráculo Armazem Cloud</p>
+        </body></html>
+        """
+        
+        return Response(
+            html,
+            mimetype="text/html",
+            headers={"Content-disposition": f"attachment; filename=Relatorio_SecOps_{target}.html"}
+        )
     except Exception as e:
         return f"Erro ao gerar relatório: {str(e)}", 500

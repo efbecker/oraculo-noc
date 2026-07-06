@@ -104,3 +104,15 @@
 06/07/2026 09:03:04 | INFO | [SecOps] Varredura Progressiva em apl07.excia.com.br
 06/07/2026 09:52:06 | WARNING | Task queue depth is 1
 06/07/2026 10:55:26 | INFO | Serving on http://0.0.0.0:5000
+06/07/2026 11:36:02 | INFO | [IA Oracle] Usuário 'armazem' iniciou interação livre com o modelo.
+06/07/2026 11:40:09 | INFO | [IA Oracle] Usuário 'armazem' iniciou interação livre com o modelo.
+06/07/2026 11:42:39 | INFO | [IA Oracle] Usuário 'armazem' iniciou interação livre com o modelo.
+06/07/2026 11:46:31 | INFO | [IA Oracle] Usuário 'armazem' iniciou interação livre com o modelo.
+06/07/2026 11:46:59 | INFO | [IA Oracle] Usuário 'armazem' iniciou interação livre com o modelo.
+06/07/2026 11:47:22 | INFO | [IA Oracle] Usuário 'armazem' iniciou interação livre com o modelo.
+06/07/2026 14:01:35 | INFO | [IA Oracle] Usuário 'armazem' iniciou interação livre com o modelo.
+06/07/2026 14:23:17 | INFO | [Relatório] Usuário 'asv' solicitou relatório FinOps/Consumo para alvo: TODOS (30.0 dias).
+06/07/2026 14:47:58 | INFO | Serving on http://0.0.0.0:5000
+06/07/2026 15:16:39 | INFO | Serving on http://0.0.0.0:5000
+06/07/2026 15:16:49 | INFO | Serving on http://0.0.0.0:5000
+06/07/2026 15:19:34 | INFO | [Relatório] Usuário 'asv' solicitou relatório FinOps/Consumo para alvo: TODOS (30.0 dias).
