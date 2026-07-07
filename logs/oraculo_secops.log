@@ -155,3 +155,12 @@
 07/07/2026 11:28:25 | INFO | [IA Oracle] Usuário 'asv' iniciou interação livre com o modelo.
 07/07/2026 11:29:02 | INFO | [Relatório] Usuário 'asv' solicitou relatório FinOps/Consumo para alvo: cliente_asv_vm_asv-bd01-ipel (7.0 dias).
 07/07/2026 11:45:25 | INFO | Serving on http://0.0.0.0:5000
+07/07/2026 11:46:28 | INFO | [Relatório] Usuário 'pollux' solicitou relatório FinOps/Consumo para alvo: TODOS (7.0 dias).
+07/07/2026 11:55:50 | INFO | Serving on http://0.0.0.0:5000
+07/07/2026 11:55:59 | INFO | [Relatório] Usuário 'pollux' solicitou relatório FinOps/Consumo para alvo: TODOS (7.0 dias).
+07/07/2026 13:44:44 | INFO | Serving on http://0.0.0.0:5000
+07/07/2026 13:45:02 | INFO | [Relatório] Usuário 'pollux' solicitou relatório FinOps/Consumo para alvo: TODOS (7.0 dias).
+07/07/2026 14:23:14 | INFO | Serving on http://0.0.0.0:5000
+07/07/2026 14:23:51 | INFO | [Relatório] Usuário 'pollux' solicitou relatório FinOps/Consumo para alvo: TODOS (7.0 dias).
+07/07/2026 15:08:25 | INFO | Serving on http://0.0.0.0:5000
+07/07/2026 15:08:41 | INFO | [Relatório] Usuário 'pollux' solicitou relatório FinOps/Consumo para alvo: TODOS (30.0 dias).

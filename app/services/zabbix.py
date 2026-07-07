@@ -48,29 +48,12 @@ def _parse_disk_key(key_):
     m = DISK_KEY_REGEX.search(key_)
     if not m:
         return None, None
-    mount = m.group(1).strip()
+    # O template oficial "Windows by Zabbix agent" usa o mount ENTRE ASPAS na
+    # chave (ex.: vfs.fs.size["C:",pused]) — sem remover essas aspas, TODO
+    # item Windows falha na normalização e o disco inteiro desaparece.
+    mount = m.group(1).strip().strip('\'"')
     kind = (m.group(2) or '').lower() or None
     return mount, kind
-
-# Extrai o "token" real do disco (caminho Unix tipo /boot, /boot/efi, / — ou
-# letra de drive Windows tipo C:) de dentro do NOME do item, quando a chave
-# técnica não ajudou. É mais robusto que tentar prever cada frase possível
-# ("Espaço livre no disco X", "Espaço usado no disco X", "Free disk space on
-# X"...): não importa a frase ao redor, o identificador do disco em si (o
-# caminho/drive) é sempre reconhecível pelo formato, então "livre" e "usado"
-# do MESMO disco caem no mesmo identificador e são deduplicados corretamente.
-_MOUNT_TOKEN_REGEX = re.compile(r'([A-Za-z]:\\?|/(?:[^\s,()%\[\]]*))')
-
-def _extrair_token_disco(nome):
-    if not nome:
-        return None
-    tokens = _MOUNT_TOKEN_REGEX.findall(nome)
-    if not tokens:
-        return None
-    token = tokens[-1].rstrip('/')  # tira barra final, exceto a raiz "/" sozinha
-    if not token:
-        token = '/'
-    return token
 
 STATIC_DIR = os.path.join(os.getcwd(), 'app', 'static')
 os.makedirs(STATIC_DIR, exist_ok=True)
@@ -321,71 +304,93 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
         def is_valid_net(nl):
             return not re.search(r'\b(loopback|lo|veth|docker|speed|velocidade|drop|error|discard|status|estado|ssl)\b', nl)
 
+        def _normalizar_mount(mount):
+            """Aplica a regra estrita: só aceita disco Linux (começa com '/')
+            ou drive Windows (uma letra A-Z, com ou sem ':'/'\\'). Qualquer
+            outra coisa (nomes de item, texto livre, etc.) é REJEITADA — não
+            tentamos mais adivinhar por frase/nome, só pela chave técnica.
+            Devolve o identificador normalizado, ou None se não for um mount
+            reconhecível por essa regra."""
+            if not mount:
+                return None
+            m = mount.strip().strip('\'"')  # segunda camada: tira aspas residuais
+            if m.startswith('/'):
+                m = m.rstrip('/')
+                return m or '/'
+            # Windows: só uma letra, opcionalmente seguida de ':' e/ou '\' ou '/'
+            wm = re.fullmatch(r'([A-Za-z]):?[\\/]?', m)
+            if wm:
+                return wm.group(1).upper() + ':'
+            return None
+
+        # Regex comprovado (vindo de um script de referência do próprio cliente
+        # que já funciona no ambiente real deles): acha "C:" (drive Windows) ou
+        # um caminho "/algo" (Linux) DENTRO do nome do item, não importa a frase
+        # ao redor. Usado como respaldo quando a chave técnica não é suficiente
+        # (muitos templates reais não seguem o padrão vfs.fs.size[...] limpo).
+        _DISK_NAME_TOKEN_REGEX = re.compile(r'([A-Za-z]:|/[a-zA-Z0-9\-_/]*)')
+
         def try_classify_disk(it, nl, hid):
-            """Tenta classificar o item como disco. Primeiro pela CHAVE técnica
-            (robusto, independe de idioma/template); se não bater, cai no
-            fallback por nome (heurística, para templates customizados).
-            Devolve True se o item É de disco (mesmo que descartado pelo filtro
-            de pseudo-filesystem), para não vazar pro classificador de rede.
+            """Classifica o item como disco. Duas fontes, nessa ordem:
 
-            DEDUPLICA por disco: muitos templates do Zabbix têm 2-3 itens para
-            o MESMO disco físico (ex.: bytes livres, bytes usados E percentual
-            livre — vfs.fs.size[C:,free] / [C:,used] / [C:,pfree]). Sem isso,
-            cada disco aparecia repetido várias vezes no relatório. Prioridade:
-            item percentual (pused/pfree) da chave > qualquer outro.
-            """
+            1) CHAVE técnica Zabbix (vfs.fs.size[MOUNT,KIND] / vfs.fs.dependent),
+               quando reconhecível — mais robusta, independe de idioma.
+            2) NOME do item, com o mesmo regex comprovado no ambiente real
+               (letra de drive Windows ou caminho Linux embutido no texto).
+               É o respaldo para os muitos templates cujos itens não usam a
+               chave padrão do Zabbix.
+
+            Em ambos os casos, MOUNT precisa ser um disco Linux ('/...') ou
+            drive Windows (uma letra) — ver _normalizar_mount. Agrupa por
+            disco: um MESMO disco físico pode ter vários itens (pused, pfree,
+            used, free, total); guardamos TODOS os que existirem, e no
+            momento de desenhar calculamos o uso com a melhor combinação
+            disponível (ver _calcular_uso_disco).
+
+            Devolve True se o item É de disco (para não vazar pro
+            classificador de rede), mesmo que descartado por pseudo-fs."""
             mount, kind = _parse_disk_key(it.get('key_', ''))
+            if mount is not None and kind in ('pused', 'pfree', 'used', 'free', 'total'):
+                identificador = _normalizar_mount(mount)
+                if identificador is not None and not DISCOS_BLOQUEADOS_REGEX.search(mount):
+                    grupo = host_items[hid]['_disk_map'].setdefault(identificador, {})
+                    grupo[kind] = it
+                return True  # é item de disco pela chave (mesmo que descartado)
 
-            if mount is not None and kind in ('pused', 'pfree'):
-                if not DISCOS_BLOQUEADOS_REGEX.search(mount):
-                    identificador = mount.strip().upper()
-                    existente = host_items[hid]['_disk_map'].get(identificador)
-                    # Prioridade máxima: sempre pode substituir uma entrada de
-                    # prioridade menor (bytes absolutos / nome) pela percentual.
-                    if existente is None or existente[0] < 2:
-                        host_items[hid]['_disk_map'][identificador] = (2, it)
+            # --- Fallback por nome ---
+            if not any(x in nl for x in ('disco', 'disk', 'espaço em', 'espaco em', 'tamanho')):
+                return False
+
+            m = _DISK_NAME_TOKEN_REGEX.search(it['name'])
+            if not m:
+                return True  # é sobre disco, mas não achamos o identificador — ignora
+            token = m.group(1)
+            identificador = _normalizar_mount(token)
+            if identificador is None or DISCOS_BLOQUEADOS_REGEX.search(token):
                 return True
 
-            if mount is not None and kind in ('used', 'free', 'total'):
-                # Item de disco reconhecido pela chave, mas em bytes absolutos
-                # (não percentual). Só entra como candidato de prioridade baixa
-                # — se depois aparecer a versão percentual do MESMO disco, ela
-                # assume o lugar (tratado no bloco acima).
-                if not DISCOS_BLOQUEADOS_REGEX.search(mount):
-                    identificador = mount.strip().upper()
-                    if identificador not in host_items[hid]['_disk_map']:
-                        host_items[hid]['_disk_map'][identificador] = (1, it)
-                return True
+            unidades = (it.get('units') or '').lower()
+            if '%' in unidades:
+                if any(x in nl for x in ('livre', 'free')):
+                    kind_estimado = 'pfree'
+                else:
+                    kind_estimado = 'pused'  # padrão mais comum quando ambíguo
+            elif 'total' in nl:
+                kind_estimado = 'total'
+            elif any(x in nl for x in ('usado', 'used')):
+                kind_estimado = 'used'
+            elif any(x in nl for x in ('livre', 'free')):
+                kind_estimado = 'free'
+            else:
+                return True  # não deu pra saber o tipo do valor, ignora com segurança
 
-            if re.search(
-                r'\b(espaço livre|espaco livre|espaço.*usado|espaco.*usado|pused|pfree|'
-                r'space used|space free|storage used|disk used|disk free|disk usage|'
-                r'space utilization|utilização|utilizacao|armazenamento|uso de disco)\b',
-                nl
-            ):
-                token = _extrair_token_disco(it['name'])
-                n_amigavel = re.sub(
-                    r'(?i)espaço livre no disco em porcentagem\s*(?:em\s+)?|espaco livre no disco em porcentagem\s*(?:em\s+)?|'
-                    r'espaço em disco usado,?\s*em\s*%\s*(?:em\s+)?|espaco em disco usado,?\s*em\s*%\s*(?:em\s+)?|'
-                    r'espaço livre no disco\s*|espaco livre no disco\s*|'
-                    r'espaço usado no disco\s*|espaco usado no disco\s*|'
-                    r'espaço em disco usado\s*|espaco em disco usado\s*|'
-                    r'free disk space on\s*|used disk space on\s*',
-                    '', it['name'], flags=re.IGNORECASE
-                ).strip()
-                candidato_bloqueio = token or n_amigavel
-                if not candidato_bloqueio or not DISCOS_BLOQUEADOS_REGEX.search(candidato_bloqueio):
-                    # Identificador de dedup: prioriza o TOKEN extraído (caminho/drive
-                    # real, robusto a qualquer frase ao redor). Só cai no texto
-                    # "amigável" resultante da substituição se não achou token nenhum
-                    # — assim "livre" e "usado" do MESMO disco sempre se agrupam,
-                    # não importa o template/idioma do item no Zabbix.
-                    identificador = (token or n_amigavel or it['name']).strip().upper()
-                    if identificador not in host_items[hid]['_disk_map']:
-                        host_items[hid]['_disk_map'][identificador] = (1, it)
-                return True
-
-            return False
+            grupo = host_items[hid]['_disk_map'].setdefault(identificador, {})
+            # A chave técnica (quando existir) já tem prioridade automática, pois
+            # roda primeiro no loop de items e "grupo[kind]" só é sobrescrito se
+            # o MESMO kind aparecer de novo — então isso nunca derruba um dado
+            # melhor que já tenha vindo pela chave.
+            grupo.setdefault(kind_estimado, it)
+            return True
         
         for it in items:
             nl = it['name'].lower()
@@ -413,12 +418,15 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
                 elif re.search(r'\b(out|outbound|tx|sent|transmit[a-z]*|transmitidos|sa[ií]da|upload)\b', nl):
                     host_items[hid]['nets'][iface_name]['out'] = it
 
-        # Converte o _disk_map (deduplicado por disco, prioridade percentual >
-        # bytes absolutos > nome) na lista final 'disks', ordenada pelo
-        # identificador para uma ordem estável e previsível (ex.: C:, E:, F:, J:, S:).
+        # Converte o _disk_map (agrupado por disco físico: {mount: {kind: item}})
+        # na lista final 'disks' = [{'mount': mount, 'items': {kind: item}}, ...],
+        # ordenada pelo mount para uma ordem estável e previsível (ex.: /, /boot, C:, D:).
         for hid in host_items:
             mapa = host_items[hid]['_disk_map']
-            host_items[hid]['disks'] = [item for _, (prioridade, item) in sorted(mapa.items(), key=lambda kv: kv[0])]
+            host_items[hid]['disks'] = [
+                {'mount': mount, 'items': kinds}
+                for mount, kinds in sorted(mapa.items(), key=lambda kv: kv[0])
+            ]
 
         secoes_html_vms = []
         linhas_tabela_resumo = []
@@ -435,7 +443,8 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
             
             if not is_fgt:
                 for k in ['cpu', 'mem']: host_items_to_fetch.extend(h_it[k])
-                host_items_to_fetch.extend(h_it['disks'])
+                for grupo_disco in h_it['disks']:
+                    host_items_to_fetch.extend(grupo_disco['items'].values())
                 if h_it['cpu_total']: host_items_to_fetch.append(h_it['cpu_total'])
                 if h_it['mem_total']: host_items_to_fetch.append(h_it['mem_total'])
             
@@ -593,44 +602,57 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
                             elif avg_out > 0 and avg_out < 1: no_str = f"{avg_out*1000:.0f} Kbps"
                             else: no_str = f"{avg_out:.2f} Mbps"
 
+            def _calcular_uso_disco(items_por_tipo):
+                """Calcula o % de USO de um disco a partir dos itens disponíveis
+                (pode ter 1 a 5 dos tipos: pused/pfree/used/free/total). Usa a
+                melhor combinação possível, nessa ordem de preferência:
+                1) pused direto  2) 100 - pfree  3) used/total  4) 100 - free/total
+                5) used/(used+free)  — sem dado suficiente, devolve None (não 0,
+                para diferenciar 'disco vazio de verdade' de 'sem dado')."""
+                valores = {}
+                for tipo, item in items_por_tipo.items():
+                    avg, _mx, _u = extract_and_plot(item, None, {})
+                    if avg is not None:
+                        valores[tipo] = avg
+
+                if 'pused' in valores:
+                    return max(0.0, min(100.0, valores['pused']))
+                if 'pfree' in valores:
+                    return max(0.0, min(100.0, 100.0 - valores['pfree']))
+                if 'used' in valores and 'total' in valores and valores['total'] > 0:
+                    return max(0.0, min(100.0, valores['used'] / valores['total'] * 100.0))
+                if 'free' in valores and 'total' in valores and valores['total'] > 0:
+                    return max(0.0, min(100.0, 100.0 - (valores['free'] / valores['total'] * 100.0)))
+                if 'used' in valores and 'free' in valores and (valores['used'] + valores['free']) > 0:
+                    return max(0.0, min(100.0, valores['used'] / (valores['used'] + valores['free']) * 100.0))
+                return None
+
             disk_summaries = []
             if n_disks > 0 and not is_fgt:
                 gs_disk = gs[line_rows].subgridspec(1, n_disks, wspace=0.3)
-                for i, d_it in enumerate(h_it['disks']):
+                for i, grupo_disco in enumerate(h_it['disks']):
                     ax_d = fig.add_subplot(gs_disk[0, i])
                     ax_d.set_facecolor('#1e1e1e')
-                    d_avg, d_max, d_u = extract_and_plot(d_it, None, {})
-                    used_pct = 0.0
-                    d_mount, d_kind = _parse_disk_key(d_it.get('key_', ''))
-                    if d_avg is not None:
-                        if d_u == '%' or d_avg <= 100.5:
-                            if d_kind == 'pfree':
-                                used_pct = 100.0 - d_avg
-                            elif d_kind == 'pused':
-                                used_pct = d_avg
-                            else:
-                                # Fallback (sem key reconhecida): heurística pelo nome.
-                                used_pct = 100.0 - d_avg if any(x in d_it['name'].lower() for x in ['livre', 'free']) else d_avg
-                        else: used_pct = 0.0
 
-                    disk_summaries.append(f"{used_pct:.1f}%")
-                    ax_d.pie([used_pct, max(0, 100-used_pct)], labels=['Uso', 'Livre'], colors=['#00e676', '#333333'], startangle=90, radius=1.2, wedgeprops=dict(width=0.4, edgecolor='#1e1e1e'), textprops={'color': '#aaaaaa', 'fontsize': 10})
-                    ax_d.text(0, 0, f'{used_pct:.1f}%', ha='center', va='center', fontsize=13, fontweight='bold', color='#ffffff')
-                    if d_mount:
-                        n_amigavel = d_mount
-                    else:
-                        n_amigavel = _extrair_token_disco(d_it['name']) or re.sub(
-                            r'(?i)espaço livre no disco em porcentagem\s*(?:em\s+)?|espaco livre no disco em porcentagem\s*(?:em\s+)?|'
-                            r'espaço em disco usado,?\s*em\s*%\s*(?:em\s+)?|espaco em disco usado,?\s*em\s*%\s*(?:em\s+)?|'
-                            r'espaço livre no disco\s*|espaco livre no disco\s*|'
-                            r'espaço usado no disco\s*|espaco usado no disco\s*|'
-                            r'espaço em disco usado\s*|espaco em disco usado\s*|'
-                            r'free disk space on\s*|used disk space on\s*',
-                            '', d_it['name'], flags=re.IGNORECASE
-                        ).strip()
-                    ax_d.set_title(n_amigavel or 'Disco', fontsize=12, fontweight='bold', pad=20, color='#e0e0e0')
-                    
-                    if used_pct > 85: insights_finops.append(f"🚨 <b>Disco ({n_amigavel}):</b> Volume crítico (> 85%). Expansão recomendada.")
+                    used_pct = _calcular_uso_disco(grupo_disco['items'])
+                    sem_dado = used_pct is None
+                    if sem_dado:
+                        used_pct = 0.0
+
+                    disk_summaries.append(f"{used_pct:.1f}%" if not sem_dado else "sem dado")
+                    cor_uso = '#00e676' if not sem_dado else '#555555'
+                    ax_d.pie([used_pct, max(0, 100 - used_pct)], labels=['Uso', 'Livre'], colors=[cor_uso, '#333333'], startangle=90, radius=1.2, wedgeprops=dict(width=0.4, edgecolor='#1e1e1e'), textprops={'color': '#aaaaaa', 'fontsize': 10})
+                    texto_central = f'{used_pct:.1f}%' if not sem_dado else 's/ dado'
+                    ax_d.text(0, 0, texto_central, ha='center', va='center', fontsize=13 if not sem_dado else 10, fontweight='bold', color='#ffffff')
+
+                    # Título = SEMPRE o mount técnico (chave do Zabbix), nunca o nome
+                    # do item — é por isso que fica limpo e consistente em qualquer
+                    # idioma/template: "/", "/boot", "C:", "D:"...
+                    n_amigavel = grupo_disco['mount']
+                    ax_d.set_title(n_amigavel, fontsize=12, fontweight='bold', pad=20, color='#e0e0e0')
+
+                    if not sem_dado and used_pct > 85:
+                        insights_finops.append(f"🚨 <b>Disco ({n_amigavel}):</b> Volume crítico (> 85%). Expansão recomendada.")
 
             if disk_summaries: d_str_resumo = " | ".join(disk_summaries)
             
