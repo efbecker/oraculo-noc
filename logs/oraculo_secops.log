@@ -144,3 +144,8 @@
 07/07/2026 10:44:44 | WARNING | [SecOps AUDIT] 🚨 Usuário 'armazem' (Perfil: ADMINISTRADOR) INICIOU scan profundo no alvo: colegiobonja.com.br.
 07/07/2026 10:44:44 | INFO | [SecOps] Varredura Progressiva em colegiobonja.com.br
 07/07/2026 10:48:32 | INFO | Serving on http://0.0.0.0:5000
+07/07/2026 10:49:41 | INFO | [Relatório] Usuário 'asv' solicitou relatório FinOps/Consumo para alvo: TODOS (30.0 dias).
+07/07/2026 10:50:00 | WARNING | [SecOps AUDIT] 🚨 Usuário 'armazem' (Perfil: ADMINISTRADOR) INICIOU scan profundo no alvo: colegiobonja.com.br.
+07/07/2026 10:50:00 | INFO | [SecOps] Varredura Progressiva em colegiobonja.com.br
+07/07/2026 11:13:33 | INFO | Serving on http://0.0.0.0:5000
+07/07/2026 11:13:59 | INFO | [Relatório] Usuário 'asv' solicitou relatório FinOps/Consumo para alvo: TODOS (30.0 dias).

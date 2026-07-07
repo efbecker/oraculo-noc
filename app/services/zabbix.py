@@ -52,6 +52,26 @@ def _parse_disk_key(key_):
     kind = (m.group(2) or '').lower() or None
     return mount, kind
 
+# Extrai o "token" real do disco (caminho Unix tipo /boot, /boot/efi, / — ou
+# letra de drive Windows tipo C:) de dentro do NOME do item, quando a chave
+# técnica não ajudou. É mais robusto que tentar prever cada frase possível
+# ("Espaço livre no disco X", "Espaço usado no disco X", "Free disk space on
+# X"...): não importa a frase ao redor, o identificador do disco em si (o
+# caminho/drive) é sempre reconhecível pelo formato, então "livre" e "usado"
+# do MESMO disco caem no mesmo identificador e são deduplicados corretamente.
+_MOUNT_TOKEN_REGEX = re.compile(r'([A-Za-z]:\\?|/(?:[^\s,()%\[\]]*))')
+
+def _extrair_token_disco(nome):
+    if not nome:
+        return None
+    tokens = _MOUNT_TOKEN_REGEX.findall(nome)
+    if not tokens:
+        return None
+    token = tokens[-1].rstrip('/')  # tira barra final, exceto a raiz "/" sozinha
+    if not token:
+        token = '/'
+    return token
+
 STATIC_DIR = os.path.join(os.getcwd(), 'app', 'static')
 os.makedirs(STATIC_DIR, exist_ok=True)
 
@@ -324,15 +344,24 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
                 r'space utilization|utilização|utilizacao|armazenamento|uso de disco)\b',
                 nl
             ):
+                token = _extrair_token_disco(it['name'])
                 n_amigavel = re.sub(
                     r'(?i)espaço livre no disco em porcentagem\s*(?:em\s+)?|espaco livre no disco em porcentagem\s*(?:em\s+)?|'
-                    r'espaço em disco usado,?\s*em\s*%\s*(?:em\s+)?|espaco em disco usado,?\s*em\s*%\s*(?:em\s+)?',
-                    '', it['name']
+                    r'espaço em disco usado,?\s*em\s*%\s*(?:em\s+)?|espaco em disco usado,?\s*em\s*%\s*(?:em\s+)?|'
+                    r'espaço livre no disco\s*|espaco livre no disco\s*|'
+                    r'espaço usado no disco\s*|espaco usado no disco\s*|'
+                    r'espaço em disco usado\s*|espaco em disco usado\s*|'
+                    r'free disk space on\s*|used disk space on\s*',
+                    '', it['name'], flags=re.IGNORECASE
                 ).strip()
-                if not n_amigavel or not DISCOS_BLOQUEADOS_REGEX.search(n_amigavel):
-                    # Sem key reconhecida: agrupa pelo nome "amigável" resultante
-                    # (ex.: duas variações de texto que sobram em "C:" caem juntas).
-                    identificador = (n_amigavel or it['name']).strip().upper()
+                candidato_bloqueio = token or n_amigavel
+                if not candidato_bloqueio or not DISCOS_BLOQUEADOS_REGEX.search(candidato_bloqueio):
+                    # Identificador de dedup: prioriza o TOKEN extraído (caminho/drive
+                    # real, robusto a qualquer frase ao redor). Só cai no texto
+                    # "amigável" resultante da substituição se não achou token nenhum
+                    # — assim "livre" e "usado" do MESMO disco sempre se agrupam,
+                    # não importa o template/idioma do item no Zabbix.
+                    identificador = (token or n_amigavel or it['name']).strip().upper()
                     if identificador not in host_items[hid]['_disk_map']:
                         host_items[hid]['_disk_map'][identificador] = (1, it)
                 return True
@@ -571,10 +600,14 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
                     if d_mount:
                         n_amigavel = d_mount
                     else:
-                        n_amigavel = re.sub(
+                        n_amigavel = _extrair_token_disco(d_it['name']) or re.sub(
                             r'(?i)espaço livre no disco em porcentagem\s*(?:em\s+)?|espaco livre no disco em porcentagem\s*(?:em\s+)?|'
-                            r'espaço em disco usado,?\s*em\s*%\s*(?:em\s+)?|espaco em disco usado,?\s*em\s*%\s*(?:em\s+)?',
-                            '', d_it['name']
+                            r'espaço em disco usado,?\s*em\s*%\s*(?:em\s+)?|espaco em disco usado,?\s*em\s*%\s*(?:em\s+)?|'
+                            r'espaço livre no disco\s*|espaco livre no disco\s*|'
+                            r'espaço usado no disco\s*|espaco usado no disco\s*|'
+                            r'espaço em disco usado\s*|espaco em disco usado\s*|'
+                            r'free disk space on\s*|used disk space on\s*',
+                            '', d_it['name'], flags=re.IGNORECASE
                         ).strip()
                     ax_d.set_title(n_amigavel or 'Disco', fontsize=12, fontweight='bold', pad=20, color='#e0e0e0')
                     
