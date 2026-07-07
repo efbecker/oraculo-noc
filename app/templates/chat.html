@@ -405,6 +405,15 @@
             const sessions = await loadSessions();
             if (!sessions || sessions.length === 0) {
                 await newSession();
+                return;
+            }
+            // Se a conversa mais recente for de um dia ANTERIOR a hoje, abre uma
+            // nova sessão automaticamente (sem precisar clicar no "+"). Se já
+            // houver uma conversa de HOJE, continua nela normalmente.
+            const hojeStr = new Date().toLocaleDateString('pt-BR'); // "DD/MM/AAAA"
+            const dataUltimaSessao = (sessions[0].created_at || '').split(' ')[0];
+            if (dataUltimaSessao !== hojeStr) {
+                await newSession();
             } else {
                 await loadSession(currentSessionId || sessions[0].id);
             }
