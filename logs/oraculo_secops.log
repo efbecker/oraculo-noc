@@ -149,3 +149,9 @@
 07/07/2026 10:50:00 | INFO | [SecOps] Varredura Progressiva em colegiobonja.com.br
 07/07/2026 11:13:33 | INFO | Serving on http://0.0.0.0:5000
 07/07/2026 11:13:59 | INFO | [Relatório] Usuário 'asv' solicitou relatório FinOps/Consumo para alvo: TODOS (30.0 dias).
+07/07/2026 11:23:30 | INFO | [Relatório] Usuário 'asv' solicitou relatório FinOps/Consumo para alvo: cliente_asv_vm_csrv-rds01-arb (1.0 dias).
+07/07/2026 11:23:58 | INFO | [Relatório] Usuário 'asv' solicitou relatório FinOps/Consumo para alvo: cliente_asv_vm_csrv-rds01-arb (1.0 dias).
+07/07/2026 11:27:54 | INFO | [Relatório] Usuário 'asv' solicitou relatório FinOps/Consumo para alvo: cliente_asv_vm_asv-bd01-ipel (1.0 dias).
+07/07/2026 11:28:25 | INFO | [IA Oracle] Usuário 'asv' iniciou interação livre com o modelo.
+07/07/2026 11:29:02 | INFO | [Relatório] Usuário 'asv' solicitou relatório FinOps/Consumo para alvo: cliente_asv_vm_asv-bd01-ipel (7.0 dias).
+07/07/2026 11:45:25 | INFO | Serving on http://0.0.0.0:5000

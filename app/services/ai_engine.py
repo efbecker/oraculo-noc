@@ -117,6 +117,7 @@ def process_oraculo_message(message, username, token_zabbix, grupo_cliente, tts_
         dias = 1.0
         dias_match = re.search(r'(\d+)\s*dias?', msg_l)
         if dias_match: dias = float(dias_match.group(1))
+        dias = max(dias, 1.0)  # prazo mínimo: nunca gera relatório com menos de 1 dia de histórico
         
         target = "TODOS"
         # Só assume um alvo específico com uma palavra-chave INEQUÍVOCA na frente
@@ -153,7 +154,7 @@ def process_oraculo_message(message, username, token_zabbix, grupo_cliente, tts_
         else:
             label = f"Relatório {target} ({dias_txt} dia(s))"
             def _gerar():
-                return gerar_grafico_zabbix(target, metrica, dias, token_zabbix, zabbix_url)
+                return gerar_grafico_zabbix(target, metrica, dias, token_zabbix, grupo_cliente, zabbix_url)
 
         job_id = start_report_job(username, label, _gerar, session_id=session_id)
         if not job_id:

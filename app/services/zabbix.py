@@ -275,7 +275,12 @@ def consultar_incidentes_zabbix(nome_alvo: str, dias_historico: float, token: st
 
     except Exception as e: return f"Erro na coleta de incidentes: {str(e)}"
 
-def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str, url: str = None) -> str:
+def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str, url: str = None, host_filter: str = None) -> str:
+    """Gera o relatório completo (CPU/memória/rede/discos) para os hosts do
+    grupo do usuário. Se host_filter for informado, restringe aos hosts cujo
+    nome bate com esse filtro (usado pelo pedido de relatório de UMA VM
+    específica) — mantendo o MESMO layout/motor do relatório de todos, só
+    reduzindo a lista de hosts processados."""
     dias = int(float(dias_historico)) if float(dias_historico) >= 1 else 1
     hora_atual = int(time.time())
     hora_passada = int(hora_atual - (dias * 24 * 3600))
@@ -289,6 +294,20 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
         
         hosts = zabbix_api("host.get", {"output": ["hostid", "name"], **filtro}, token, url)
         if not hosts: return "Nenhum servidor encontrado no grupo."
+
+        if host_filter:
+            # IMPORTANTE: o filtro por nome atua SEMPRE sobre a lista já restrita
+            # ao grupo do usuário (filtro acima) — nunca busca fora do escopo do
+            # cliente, mesmo que o nome pedido exista em outra conta.
+            alvo = host_filter.strip().lower()
+            exatos = [h for h in hosts if h['name'].strip().lower() == alvo]
+            if exatos:
+                hosts = exatos
+            else:
+                parciais = [h for h in hosts if alvo in h['name'].strip().lower() or h['name'].strip().lower() in alvo]
+                if not parciais:
+                    return f"Não encontrei nenhuma VM chamada '{host_filter}' no seu ambiente. Confira o nome exato no Zabbix e tente novamente."
+                hosts = parciais
         
         host_ids = [h['hostid'] for h in hosts]
         items = zabbix_api("item.get", {
@@ -745,5 +764,15 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
         return html_progress + msg_chat + botao_html
     except Exception as e: return f"Erro ao gerar relatório global: {str(e)}"
 
-def gerar_grafico_zabbix(nome_host: str, metrica: str, quantidade_dias: float, token: str, url: str = None) -> str:
-    pass # Mantive essa parte limpa para você não perder nada que já tenha feito aqui!
+def gerar_grafico_zabbix(nome_host: str, metrica: str, quantidade_dias: float, token: str, grupo: str = None, url: str = None) -> str:
+    """Relatório de UMA VM específica, pedida por nome (ex.: "gere relatório
+    da VM CLIENTE_ASV_VM_ASV-BD01-IPEL"). Reaproveita o MESMO motor/layout do
+    relatório de "TODOS" (gerar_relatorio_consumo_todos), só restringindo a
+    lista de hosts a quem bate com o nome pedido — por isso o relatório sai
+    completo (CPU, memória, rede, discos), não só a 'metrica' isolada.
+
+    IMPORTANTE (multi-tenant): 'grupo' é sempre respeitado — a busca pelo nome
+    do host NUNCA sai do grupo/conta do usuário que pediu o relatório, mesmo
+    que exista uma VM com nome parecido em outra conta.
+    """
+    return gerar_relatorio_consumo_todos(quantidade_dias, token, grupo, url, host_filter=nome_host)
