@@ -64,25 +64,9 @@
         .input-box input { flex: 1; background: transparent; border: none; color: #fff; padding: 12px 10px; outline: none; font-size: 16px; min-width: 0; }
         .input-box input::placeholder { color: #64748b; font-size: 14px; }
         
-        .btn-icon { background: transparent; border: none; color: #64748b; padding: 10px 12px; cursor: pointer; font-size: 16px; transition: 0.3s; }
-        .btn-icon:hover { color: #e2e8f0; }
-        .btn-icon.active { color: #00e5ff; text-shadow: 0 0 10px rgba(0,229,255,0.5); }
-        .btn-icon.recording { color: #ff4d4d; animation: pulsar-rec 0.8s infinite alternate; }
-        /* Modo Conversa (voz hands-free) */
-        .btn-convo { background: transparent; border: 1px solid #2d3748; color: #64748b; padding: 8px 12px; border-radius: 20px; cursor: pointer; font-size: 14px; display: flex; align-items: center; gap: 6px; transition: .25s; white-space: nowrap; }
-        .btn-convo:hover { color: #e2e8f0; border-color: #3d4a5c; }
-        .btn-convo.on { color: #00e5ff; border-color: #00e5ff; box-shadow: 0 0 12px rgba(0,229,255,0.25); }
-        .convo-status { display: none; align-items: center; gap: 8px; margin: 0 auto 8px auto; padding: 6px 14px; border-radius: 20px; background: #0f161d; border: 1px solid #1f2933; font-size: 12px; color: #aaa; width: fit-content; }
-        .convo-status.show { display: flex; }
-        .convo-dot { width: 9px; height: 9px; border-radius: 50%; background: #64748b; }
-        .convo-status[data-state="listening"] .convo-dot { background: #3fb950; animation: pulsar-conv 1s infinite; }
-        .convo-status[data-state="thinking"]  .convo-dot { background: #d29922; animation: pulsar-conv 1s infinite; }
-        .convo-status[data-state="speaking"]  .convo-dot { background: #00e5ff; animation: pulsar-conv 1s infinite; }
-        @keyframes pulsar-conv { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
         .btn-send { background: #0077ff; color: #fff; border: none; width: 36px; height: 36px; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: 0.3s; flex-shrink: 0; }
         .btn-send:hover { background: #0055ff; transform: translateY(-2px); }
         .loading { color: #00e5ff; font-size: 14px; font-style: italic; margin-left: 20px; display: none; }
-        @keyframes pulsar-rec { from { opacity: 0.4; } to { opacity: 1; } }
 
         @media (max-width: 768px) {
             body { flex-direction: column; }
@@ -126,6 +110,7 @@
             <div class="badge-info"><i class="fas fa-server"></i> {{ grupo_cliente }}</div>
             {% if profile in ['ADMIN', 'ADMINISTRADOR'] %}
             <a href="/admin" class="badge-admin"><i class="fas fa-cog"></i> Admin</a>
+            <a href="/admin/logs" class="badge-admin"><i class="fas fa-scroll"></i> Logs</a>
             {% endif %}
             <div class="badge-info" style="color: #fff;"><i class="fas fa-user-circle"></i> {{ username|upper }}</div>
             <a href="/logout" class="badge-logout" title="Sair"><i class="fas fa-power-off"></i></a>
@@ -135,14 +120,8 @@
         <div id="loading" class="loading msg-bot">Oráculo está a pensar...</div>
 
         <div class="input-wrapper">
-            <div class="convo-status" id="convoStatus" data-state="idle"><span class="convo-dot"></span><span id="convoStatusText">Modo conversa</span></div>
             <div class="input-box">
-                <button class="btn-icon" id="btnSpeaker" onclick="toggleTTS()" title="Ativar Resposta por Voz"><i class="fas fa-volume-up"></i></button>
-                <button class="btn-icon" id="btnMic" onclick="toggleSTT()" title="Falar ao Microfone"><i class="fas fa-microphone"></i></button>
                 <input type="text" id="chatInput" placeholder="Pergunte sobre infraestrutura..." onkeypress="if(event.key==='Enter') sendMessage()">
-                {% if profile in ['ADMIN', 'ADMINISTRADOR'] %}
-                <button class="btn-convo" id="btnConvo" onclick="toggleConversa()" title="Modo Conversa por voz (hands-free)"><i class="fas fa-headset"></i> Conversa</button>
-                {% endif %}
                 <button class="btn-send" onclick="sendMessage()"><i class="fas fa-arrow-up"></i></button>
             </div>
         </div>
@@ -171,12 +150,7 @@
         const chatMessages = document.getElementById('chatMessages');
         const chatInput = document.getElementById('chatInput');
         const loading = document.getElementById('loading');
-        const btnSpeaker = document.getElementById('btnSpeaker');
-        const btnMic = document.getElementById('btnMic');
 
-        let ttsEnabled = false;
-        let recognition = null;
-        let isRecording = false;
         let pollingInterval = null; 
         let activeScans = {};
         let currentSessionId = null;
@@ -254,233 +228,6 @@
                     await loadSession(currentSessionId || sessions[0].id);
                 }
             } catch (e) { console.error('Erro ao excluir sessão', e); }
-        }
-
-        // ================== VOZ (STT + TTS nativos do navegador) ==================
-        // --- Microfone (fala -> texto) ---
-        if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            recognition = new SpeechRecognition();
-            recognition.lang = 'pt-BR';
-            recognition.interimResults = false;
-            recognition.maxAlternatives = 1;
-            recognition.onstart = () => { isRecording = true; btnMic.classList.add('recording'); };
-            recognition.onresult = (event) => {
-                const texto = event.results[0][0].transcript;
-                chatInput.value = texto;
-                sendMessage();  // envia automaticamente o que foi falado
-            };
-            recognition.onerror = (e) => { isRecording = false; btnMic.classList.remove('recording'); console.warn('STT:', e.error); };
-            recognition.onend = () => { isRecording = false; btnMic.classList.remove('recording'); };
-        }
-
-        function toggleSTT() {
-            if (!recognition) { alert("Reconhecimento de voz não é suportado neste navegador."); return; }
-            if (isRecording) { recognition.stop(); return; }
-            try { recognition.start(); } catch (e) { /* já iniciado */ }
-        }
-
-        // --- Auto-falante (texto -> fala) via speechSynthesis ---
-        let vozPtBr = null;
-        function carregarVozes() {
-            if (!('speechSynthesis' in window)) return;
-            const vs = window.speechSynthesis.getVoices();
-            vozPtBr = vs.find(v => /pt[-_]?BR/i.test(v.lang)) || vs.find(v => /^pt/i.test(v.lang)) || null;
-        }
-        if ('speechSynthesis' in window) {
-            carregarVozes();
-            window.speechSynthesis.onvoiceschanged = carregarVozes;
-        }
-
-        // Remove HTML, markdown, marcadores e URLs para a IA falar um texto limpo.
-        function cleanForSpeech(text) {
-            if (!text) return '';
-            let t = String(text);
-            t = t.replace(/\[BOTÃO_DOWNLOAD:.*?\]/g, ' ');
-            t = t.replace(/<[^>]+>/g, ' ');
-            t = t.replace(/https?:\/\/\S+/g, ' link ');
-            t = t.replace(/[#*_`>|]/g, ' ');
-            t = t.replace(/\s+/g, ' ').trim();
-            return t;
-        }
-
-        function speakText(text) {
-            if (!('speechSynthesis' in window) || !ttsEnabled) return;
-            const clean = cleanForSpeech(text);
-            if (!clean) return;
-            try {
-                window.speechSynthesis.cancel();  // interrompe fala anterior
-                const u = new SpeechSynthesisUtterance(clean);
-                u.lang = 'pt-BR';
-                if (vozPtBr) u.voice = vozPtBr;
-                u.rate = 1.05; u.pitch = 1.0;
-                window.speechSynthesis.speak(u);
-            } catch (e) { console.error('TTS erro', e); }
-        }
-
-        function toggleTTS() {
-            if (!('speechSynthesis' in window)) { alert("Seu navegador não suporta leitura por voz."); return; }
-            ttsEnabled = !ttsEnabled;
-            btnSpeaker.classList.toggle('active', ttsEnabled);
-            btnSpeaker.title = ttsEnabled ? 'Resposta por voz ATIVADA' : 'Ativar Resposta por Voz';
-            if (ttsEnabled) { carregarVozes(); speakText('Assistente de voz ativada.'); }
-            else { window.speechSynthesis.cancel(); }
-        }
-
-        // ============ MODO CONVERSA (hands-free, V1 no navegador) ============
-        // Loop: ouvir -> transcrever -> enviar -> IA responde falando -> ouvir de novo.
-        // Barge-in: se você falar enquanto a IA fala, ela para na hora.
-        // OBS: use FONE DE OUVIDO para evitar que o microfone capte a própria voz da IA (eco).
-        let convoMode = false;
-        let convoRec = null;
-        let convoState = 'idle';   // idle | listening | thinking | speaking
-        let convoSpeaking = false;
-        let ttsStartAt = 0;
-        const btnConvo = document.getElementById('btnConvo');
-        const convoStatus = document.getElementById('convoStatus');
-        const convoStatusText = document.getElementById('convoStatusText');
-
-        function setConvoState(s) {
-            convoState = s;
-            const labels = { idle: 'Modo conversa', listening: 'Ouvindo…', thinking: 'Processando…', speaking: 'Falando…' };
-            if (convoStatus) { convoStatus.dataset.state = s; convoStatusText.innerText = labels[s] || ''; }
-        }
-
-        function initConvoRec() {
-            const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-            if (!SR) return null;
-            const r = new SR();
-            r.lang = 'pt-BR';
-            r.continuous = true;       // fica ouvindo o tempo todo (permite barge-in)
-            r.interimResults = true;   // resultados parciais p/ detectar fala cedo
-            r.maxAlternatives = 1;
-            r.onresult = (e) => {
-                let interim = '', finalTxt = '';
-                for (let i = e.resultIndex; i < e.results.length; i++) {
-                    const t = e.results[i][0].transcript;
-                    if (e.results[i].isFinal) finalTxt += t; else interim += t;
-                }
-                const spoken = (finalTxt || interim).trim();
-                if (!spoken) return;
-
-                // BARGE-IN: usuário falou enquanto a IA falava -> interrompe a IA
-                if (convoSpeaking) {
-                    if (Date.now() - ttsStartAt < 900) return;   // janela p/ ignorar eco inicial
-                    if (spoken.length < 4) return;               // evita disparo por ruído
-                    window.speechSynthesis.cancel();
-                    convoSpeaking = false;
-                    setConvoState('listening');
-                    return; // aguarda o resultado FINAL do usuário para processar
-                }
-
-                // Processa o turno só quando está ouvindo e chegou resultado final
-                if (convoState === 'listening' && finalTxt.trim()) {
-                    convoProcess(finalTxt.trim());
-                }
-            };
-            r.onerror = (ev) => {
-                if (['no-speech', 'aborted', 'audio-capture'].includes(ev.error)) return;
-                console.warn('Convo STT:', ev.error);
-            };
-            r.onend = () => {
-                // o navegador às vezes encerra sozinho; reinicia se ainda em modo conversa
-                if (convoMode) { try { r.start(); } catch (_) {} }
-            };
-            return r;
-        }
-
-        function toggleConversa() {
-            if (convoMode) { stopConversa(); return; }
-            if (!('speechSynthesis' in window) || !(window.SpeechRecognition || window.webkitSpeechRecognition)) {
-                alert('Seu navegador não suporta o Modo Conversa (fala/escuta).');
-                return;
-            }
-            convoMode = true;
-            btnConvo.classList.add('on');
-            convoStatus.classList.add('show');
-            carregarVozes();
-            convoRec = initConvoRec();
-            setConvoState('listening');
-            try { convoRec.start(); } catch (_) {}
-            // fala uma saudação e já entra ouvindo
-            convoSpeak('Modo conversa ativado. Pode falar.');
-        }
-
-        function stopConversa() {
-            convoMode = false;
-            convoSpeaking = false;
-            btnConvo.classList.remove('on');
-            convoStatus.classList.remove('show');
-            setConvoState('idle');
-            try { if (convoRec) convoRec.stop(); } catch (_) {}
-            window.speechSynthesis.cancel();
-        }
-
-        function convoProcess(text) {
-            if (!convoMode || !text) return;
-            setConvoState('thinking');
-            convoSend(text);
-        }
-
-        async function convoSend(message) {
-            const now = new Date();
-            const timeStr = now.toLocaleDateString('pt-BR') + ' ' + now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-            appendMessage('user', message, false, timeStr);
-            try {
-                const response = await fetch('/api/chat/message', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ message, tts_enabled: false, session_id: currentSessionId })
-                });
-                const data = await response.json();
-                if (data.session_id && data.session_id !== currentSessionId) {
-                    currentSessionId = data.session_id; loadSessions(currentSessionId);
-                }
-                let paraFalar = '';
-                if (data.error) {
-                    appendMessage('bot', `❌ Erro: ${data.error}`); paraFalar = 'Ocorreu um erro no servidor.';
-                } else if (data.action === 'scan') {
-                    if (data.reply) { appendMessage('bot', data.reply, data.is_html, data.timestamp); paraFalar = data.reply; }
-                    const est = data.stage || 'Iniciando...';
-                    activeScans[data.scan_id] = { target: data.target, stage: est, progress: 0 };
-                    createScanWidget(data.scan_id, data.target, est, 0);
-                    startRadar();
-                } else {
-                    const reply = data.reply || '⚠️ Sem resposta...';
-                    appendMessage('bot', reply, data.is_html, data.timestamp);
-                    // Não lê o HTML do dashboard; nesse caso avisa por voz.
-                    paraFalar = data.is_html ? 'Pronto. O relatório apareceu na tela.' : reply;
-                }
-                convoSpeak(paraFalar);
-            } catch (e) {
-                appendMessage('bot', '❌ Erro de comunicação.');
-                convoSpeak('Erro de comunicação.');
-            }
-        }
-
-        function convoSpeak(text) {
-            const clean = cleanForSpeech(text);
-            if (!('speechSynthesis' in window) || !clean) { convoResumeListening(); return; }
-            setConvoState('speaking');
-            convoSpeaking = true;
-            ttsStartAt = Date.now();
-            try {
-                window.speechSynthesis.cancel();
-                const u = new SpeechSynthesisUtterance(clean);
-                u.lang = 'pt-BR';
-                if (vozPtBr) u.voice = vozPtBr;
-                u.rate = 1.05; u.pitch = 1.0;
-                u.onend = () => { convoSpeaking = false; convoResumeListening(); };
-                u.onerror = () => { convoSpeaking = false; convoResumeListening(); };
-                window.speechSynthesis.speak(u);
-            } catch (e) { convoSpeaking = false; convoResumeListening(); }
-        }
-
-        function convoResumeListening() {
-            if (!convoMode) { setConvoState('idle'); return; }
-            setConvoState('listening');
-            // convoRec é contínuo; garante que está ativo
-            try { convoRec && convoRec.start(); } catch (_) {}
         }
 
         function formatMarkdown(text) {
@@ -617,7 +364,7 @@
                 const response = await fetch('/api/chat/message', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ message, tts_enabled: ttsEnabled, session_id: currentSessionId })
+                    body: JSON.stringify({ message, session_id: currentSessionId })
                 });
                 const data = await response.json();
                 loading.style.display = 'none';
@@ -633,22 +380,14 @@
                 } else {
                     if (data.action === 'scan') {
                         // Mostra já a confirmação textual...
-                        if (data.reply) { appendMessage('bot', data.reply, data.is_html, data.timestamp); speakText(data.reply); }
+                        if (data.reply) appendMessage('bot', data.reply, data.is_html, data.timestamp);
                         // ...e ativa o widget de progresso (serve para scan Nmap E relatórios).
                         const estagioInicial = data.stage || "Iniciando...";
                         activeScans[data.scan_id] = { target: data.target, stage: estagioInicial, progress: 0 };
                         createScanWidget(data.scan_id, data.target, estagioInicial, 0);
                         startRadar(); 
                     } else {
-                        const reply = data.reply || "⚠️ Sem resposta...";
-                        appendMessage('bot', reply, data.is_html, data.timestamp);
-                        // Fala só texto limpo — nunca lê o HTML do dashboard.
-                        if (!data.is_html) speakText(reply);
-                    }
-
-                    // Fallback: se algum dia o servidor devolver um áudio pronto.
-                    if (ttsEnabled && data.audio_path) {
-                        new Audio(data.audio_path).play().catch(e => console.error(e));
+                        appendMessage('bot', data.reply || "⚠️ Sem resposta...", data.is_html, data.timestamp);
                     }
                 }
             } catch (e) {

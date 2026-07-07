@@ -127,3 +127,14 @@
 07/07/2026 09:02:02 | INFO | Serving on http://0.0.0.0:5000
 07/07/2026 09:02:20 | INFO | Serving on http://0.0.0.0:5000
 07/07/2026 09:02:36 | INFO | Serving on http://0.0.0.0:5000
+07/07/2026 09:08:23 | INFO | Serving on http://0.0.0.0:5000
+07/07/2026 09:42:56 | INFO | Serving on http://0.0.0.0:5000
+07/07/2026 09:43:48 | ERROR | [Zabbix] Falha de comunicação para o usuário 'admin': ERRO_ZABBIX: Erro de comunicação com o Zabbix: Session terminated, re-login, please.
+07/07/2026 09:49:58 | INFO | Serving on http://0.0.0.0:5000
+07/07/2026 09:50:29 | ERROR | [Zabbix] Falha de comunicação para o usuário 'admin': ERRO_ZABBIX: Erro de comunicação com o Zabbix: Session terminated, re-login, please.
+07/07/2026 09:57:27 | INFO | [Relatório] Usuário 'pollux' solicitou relatório FinOps/Consumo para alvo: minha (30.0 dias).
+07/07/2026 09:59:18 | INFO | [IA Oracle] Usuário 'pollux' iniciou interação livre com o modelo.
+07/07/2026 09:59:55 | INFO | [Relatório] Usuário 'pollux' solicitou relatório FinOps/Consumo para alvo: minha (30.0 dias).
+07/07/2026 10:22:08 | INFO | Serving on http://0.0.0.0:5000
+07/07/2026 10:22:51 | INFO | Serving on http://0.0.0.0:5000
+07/07/2026 10:24:08 | INFO | [Relatório] Usuário 'pollux' solicitou relatório FinOps/Consumo para alvo: TODOS (30.0 dias).

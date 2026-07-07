@@ -1,3 +1,4 @@
+import os
 import secrets
 from werkzeug.security import generate_password_hash
 from flask import Blueprint, request, redirect, url_for, session, render_template_string, jsonify, send_file
@@ -5,6 +6,20 @@ from app import db
 from app.services import backup_manager
 
 bp = Blueprint('admin', __name__)
+
+
+@bp.app_template_filter('format_size')
+def format_size(size_bytes):
+    """Formata bytes na unidade mais legível (B/KB/MB), em vez de forçar MB
+    fixo — um backup de 8 KB virava '0.0 MB' e parecia vazio/quebrado."""
+    if not size_bytes:
+        return "-"
+    size_bytes = float(size_bytes)
+    if size_bytes < 1024:
+        return f"{int(size_bytes)} B"
+    if size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    return f"{size_bytes / 1024 / 1024:.1f} MB"
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -72,6 +87,7 @@ HTML_TEMPLATE = """
         <div class="header">
             <h1>⚙️ Gestão de Clientes & Contas (Multi-Tenant)</h1>
             <div>
+                <a href="/admin/logs" style="color: #00e5ff; margin-right: 20px; text-decoration: none; font-weight: bold; font-size: 14px; align-self: center;">📜 Logs</a>
                 <a href="/chat" style="color: #00e5ff; margin-right: 20px; text-decoration: none; font-weight: bold; font-size: 14px; align-self: center;">💬 Voltar ao Chat</a>
                 <a href="/logout" class="logout">Sair</a>
             </div>
@@ -240,26 +256,40 @@ HTML_TEMPLATE = """
             </div>
             <div id="bk-status-msg" class="status-msg"></div>
 
+            <h3 class="card-title" style="margin-top:30px; font-size:16px;">Restaurar de um Arquivo Enviado</h3>
+            <p class="field-hint" style="margin-top:0;">Útil para repovoar uma instalação nova a partir de um backup baixado (arquivo .db do SQLite ou .sql/.sql.gz do PostgreSQL). <strong style="color:#ff6b6b;">Isso substitui TODOS os dados atuais.</strong></p>
+            <div class="row-inline">
+                <input type="file" id="bk-upload-file" accept=".db,.sql,.gz" style="max-width:320px;">
+                <button type="button" class="btn-danger" onclick="restaurarUpload()">♻️ Restaurar Backup Enviado</button>
+            </div>
+            <div id="bk-upload-status-msg" class="status-msg"></div>
+
             <h3 class="card-title" style="margin-top:30px; font-size:16px;">Histórico de Backups</h3>
             <div class="table-responsive">
                 <table>
                     <thead>
                         <tr>
-                            <th>Data/Hora</th><th>Motor</th><th>Status</th><th>Tamanho</th><th>Mensagem</th><th style="width:100px;">Ação</th>
+                            <th>Data/Hora</th><th>Tipo</th><th>Motor</th><th>Status</th><th>Tamanho</th><th>Mensagem</th><th style="width:180px;">Ação</th>
                         </tr>
                     </thead>
                     <tbody>
                         {% for b in backups %}
                         <tr>
                             <td>{{ b.started_at }}</td>
+                            <td>{{ '♻️ Restauração' if b.kind == 'restore' else '💾 Backup' }}</td>
                             <td>{{ b.engine }}</td>
                             <td><span class="badge-status {{ b.status }}">{{ 'OK' if b.status == 'ok' else 'ERRO' }}</span></td>
-                            <td>{{ '%.1f'|format(b.size_bytes / 1024 / 1024) + ' MB' if b.size_bytes else '-' }}</td>
-                            <td style="max-width:280px; font-size:12px; color:#999;">{{ b.message }}</td>
-                            <td>{% if b.status == 'ok' %}<a href="/admin/backup/download/{{ b.id }}" class="btn-edit" style="text-decoration:none;">Baixar</a>{% endif %}</td>
+                            <td>{{ b.size_bytes | format_size }}</td>
+                            <td style="max-width:260px; font-size:12px; color:#999;">{{ b.message }}</td>
+                            <td class="actions-cell">
+                                {% if b.status == 'ok' and b.kind != 'restore' %}
+                                <a href="/admin/backup/download/{{ b.id }}" class="btn-edit" style="text-decoration:none;">Baixar</a>
+                                <button type="button" class="btn-danger" onclick="restaurarBackup({{ b.id }}, '{{ b.started_at }}')">Restaurar</button>
+                                {% endif %}
+                            </td>
                         </tr>
                         {% else %}
-                        <tr><td colspan="6" style="text-align:center; color:#666;">Nenhum backup executado ainda.</td></tr>
+                        <tr><td colspan="7" style="text-align:center; color:#666;">Nenhum backup executado ainda.</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>
@@ -348,6 +378,40 @@ HTML_TEMPLATE = """
                 mostrarStatus('bk-status-msg', data.ok, data.message);
                 if (data.ok) setTimeout(() => window.location.reload(), 1500);
             } catch (e) { mostrarStatus('bk-status-msg', false, 'Erro de comunicação: ' + e); }
+        }
+
+        function confirmarRestauracao(descricao) {
+            const digitado = prompt(
+                "⚠️ Atenção: isso vai apagar os dados atuais e substituir por " + descricao + ". " +
+                "Um backup de segurança do estado atual será criado automaticamente antes. " +
+                "Para confirmar, digite RESTAURAR (em maiúsculas) e clique OK:"
+            );
+            return digitado === "RESTAURAR";
+        }
+        async function restaurarBackup(id, dataHora) {
+            if (!confirmarRestauracao("o backup de " + dataHora)) return;
+            mostrarStatus('bk-status-msg', true, '🔄 Restaurando, isso pode levar alguns minutos...');
+            try {
+                const r = await fetch('/admin/backup/restore/' + id, { method: 'POST' });
+                const data = await r.json();
+                mostrarStatus('bk-status-msg', data.ok, data.message);
+                if (data.ok) setTimeout(() => window.location.reload(), 2000);
+            } catch (e) { mostrarStatus('bk-status-msg', false, 'Erro de comunicação: ' + e); }
+        }
+        async function restaurarUpload() {
+            const fileInput = document.getElementById('bk-upload-file');
+            const file = fileInput.files[0];
+            if (!file) { mostrarStatus('bk-upload-status-msg', false, 'Selecione um arquivo primeiro.'); return; }
+            if (!confirmarRestauracao("o arquivo enviado (" + file.name + ")")) return;
+            mostrarStatus('bk-upload-status-msg', true, '🔄 Enviando e restaurando, isso pode levar alguns minutos...');
+            const formData = new FormData();
+            formData.append('backup_file', file);
+            try {
+                const r = await fetch('/admin/backup/restore_upload', { method: 'POST', body: formData });
+                const data = await r.json();
+                mostrarStatus('bk-upload-status-msg', data.ok, data.message);
+                if (data.ok) setTimeout(() => window.location.reload(), 2000);
+            } catch (e) { mostrarStatus('bk-upload-status-msg', false, 'Erro de comunicação: ' + e); }
         }
 
         toggleDbFields();
@@ -503,8 +567,8 @@ def backup_run_now():
     if guard: return guard
     resultado = backup_manager.run_backup_now()
     if resultado.get("status") == "ok":
-        tamanho_mb = resultado.get("size", 0) / 1024 / 1024
-        return jsonify({"ok": True, "message": f"✅ Backup concluído ({tamanho_mb:.1f} MB)."})
+        tamanho_fmt = format_size(resultado.get("size", 0))
+        return jsonify({"ok": True, "message": f"✅ Backup concluído ({tamanho_fmt})."})
     return jsonify({"ok": False, "message": f"❌ {resultado.get('message', 'Falha desconhecida.')}"})
 
 
@@ -512,7 +576,47 @@ def backup_run_now():
 def backup_download(backup_id):
     if session.get('profile') not in ['ADMIN', 'ADMINISTRADOR']:
         return "Acesso Negado.", 403
-    row = db.query_one("SELECT file_path FROM backups WHERE id=? AND status='ok'", (backup_id,))
-    if not row or not row.get('file_path') or not __import__('os').path.exists(row['file_path']):
+    row = backup_manager.get_backup(backup_id)
+    if not row or row.get('status') != 'ok' or not row.get('file_path') or not os.path.exists(row['file_path']):
         return "Arquivo de backup não encontrado.", 404
     return send_file(row['file_path'], as_attachment=True)
+
+
+@bp.route('/admin/backup/restore/<int:backup_id>', methods=['POST'])
+def backup_restore(backup_id):
+    guard = _admin_only_json()
+    if guard: return guard
+    row = backup_manager.get_backup(backup_id)
+    if not row or row.get('status') != 'ok' or row.get('kind') != 'backup':
+        return jsonify({"ok": False, "message": "Backup não encontrado no histórico."})
+    if not row.get('file_path') or not os.path.exists(row['file_path']):
+        return jsonify({"ok": False, "message": "Arquivo deste backup não existe mais em disco (pode ter sido removido pela retenção)."})
+
+    resultado = backup_manager.restore_from_file(
+        row['file_path'], f"backup #{row['id']} de {row['started_at']}", backup_engine_hint=row['engine']
+    )
+    return jsonify({"ok": resultado["status"] == "ok", "message": resultado["message"]})
+
+
+@bp.route('/admin/backup/restore_upload', methods=['POST'])
+def backup_restore_upload():
+    guard = _admin_only_json()
+    if guard: return guard
+    f = request.files.get('backup_file')
+    if not f or not f.filename:
+        return jsonify({"ok": False, "message": "Nenhum arquivo enviado."})
+
+    os.makedirs(backup_manager.BACKUP_DIR, exist_ok=True)
+    nome_seguro = "".join(c for c in f.filename if c.isalnum() or c in "._-") or "upload"
+    tmp_path = os.path.join(backup_manager.BACKUP_DIR, f"upload_tmp_{nome_seguro}")
+    f.save(tmp_path)
+
+    try:
+        resultado = backup_manager.restore_from_file(tmp_path, f"upload: {f.filename}")
+        return jsonify({"ok": resultado["status"] == "ok", "message": resultado["message"]})
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass

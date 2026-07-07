@@ -158,6 +158,21 @@ def reconfigure(engine, host=None, port=None, dbname=None, user=None, password=N
                 json.dump(_STATE, f, indent=2)
 
 
+def reset_pool():
+    """Fecha o pool de conexões ativo (se houver) SEM mudar a configuração.
+    Usado depois de uma restauração de banco, para garantir que a próxima
+    query abra uma conexão nova em vez de reaproveitar uma conexão antiga
+    que pode estar referenciando um estado pré-restauração."""
+    global _pg_pool
+    with _state_lock:
+        if _pg_pool is not None:
+            try:
+                _pg_pool.closeall()
+            except Exception:
+                pass
+            _pg_pool = None
+
+
 def _get_pg_pool():
     global _pg_pool
     if _pg_pool is None:
@@ -304,17 +319,13 @@ def init_schema():
             )
         """)
 
-        cur.execute(f"""
-            CREATE TABLE IF NOT EXISTS backups (
-                id {serial_pk},
-                started_at TEXT,
-                engine TEXT,
-                status TEXT,
-                size_bytes INTEGER,
-                file_path TEXT,
-                message TEXT
-            )
-        """)
+        # NOTA: a tabela 'backups' (histórico de backup/restore) NÃO fica aqui —
+        # veja app/services/backup_manager.py. Ela vive num SQLite dedicado e
+        # separado, fora deste banco. Motivo: se o histórico ficasse dentro do
+        # banco principal, toda vez que o admin restaurasse um backup, o
+        # próprio histórico seria revertido junto (a tabela 'backups' voltaria
+        # ao estado do momento do snapshot) — inclusive apagando o registro do
+        # backup de segurança que acabou de ser criado antes da restauração.
 
         # Colunas adicionadas em versões posteriores (idempotente nos dois bancos).
         _add_column_if_missing(conn, 'chat_history', 'session_id', 'TEXT')
@@ -325,4 +336,3 @@ def init_schema():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_chat_hist_user_sess ON chat_history(username, session_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user ON chat_sessions(username, created_ts)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_scans_owner_status ON scans(owner, status)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_backups_started ON backups(started_at)")

@@ -119,8 +119,22 @@ def process_oraculo_message(message, username, token_zabbix, grupo_cliente, tts_
         if dias_match: dias = float(dias_match.group(1))
         
         target = "TODOS"
-        target_match = re.search(r'(?:do|da|servidor|vm|host)\s+([a-zA-Z0-9_-]+)', msg_l)
-        if target_match: target = target_match.group(1)
+        # Só assume um alvo específico com uma palavra-chave INEQUÍVOCA na frente
+        # (servidor/vm/host/máquina/aplicação). "do"/"da" sozinhos são gatilhos
+        # genéricos demais: em "relatório da minha infraestrutura", isso capturava
+        # "minha" como se fosse hostname, e o relatório saía vazio (host inexistente).
+        target_match = re.search(r'(?:servidor|vm|host|maquina|máquina|aplicacao|aplicação|app)\s+([a-zA-Z0-9_.-]+)', msg_l)
+        if target_match:
+            candidato = target_match.group(1).strip('.')
+            # Segunda camada de proteção: nunca aceita palavras comuns do português
+            # como se fossem nome de host, mesmo que um gatilho tenha "pegado" algo.
+            palavras_bloqueadas = {
+                "minha", "minhas", "meu", "meus", "nossa", "nossas", "nosso", "nossos",
+                "infraestrutura", "infra", "rede", "ambiente", "empresa", "cliente",
+                "conta", "todos", "todas", "geral", "completo", "atual", "aqui"
+            }
+            if candidato and candidato not in palavras_bloqueadas and len(candidato) > 2:
+                target = candidato
 
         metrica = "CPU"
         if any(x in msg_l for x in ['memoria', 'memória']): metrica = "MEMORIA"
