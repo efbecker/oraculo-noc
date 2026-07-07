@@ -175,3 +175,9 @@
 07/07/2026 16:50:54 | INFO | [Relatório] Usuário 'cpb' solicitou relatório FinOps/Consumo para alvo: TODOS (30.0 dias).
 07/07/2026 16:58:08 | INFO | [Relatório] Usuário 'cpb' solicitou relatório FinOps/Consumo para alvo: cliente_cpb_vm_srvwsql (7.0 dias).
 07/07/2026 17:00:28 | INFO | Serving on http://0.0.0.0:5000
+07/07/2026 17:05:20 | INFO | [IA Oracle] Usuário 'pollux' iniciou interação livre com o modelo.
+07/07/2026 17:05:52 | INFO | [Relatório] Usuário 'pollux' solicitou relatório FinOps/Consumo para alvo: cliente_pollux_fortigate (7.0 dias).
+07/07/2026 17:23:01 | WARNING | [SecOps AUDIT] 🚨 Usuário 'armazem' (Perfil: ADMINISTRADOR) INICIOU scan profundo no alvo: pollux.com.br.
+07/07/2026 17:23:01 | INFO | [SecOps] Varredura Progressiva em pollux.com.br
+07/07/2026 17:23:34 | WARNING | [SecOps AUDIT] 🚨 Usuário 'armazem' (Perfil: ADMINISTRADOR) INICIOU scan profundo no alvo: eduardobecker.com.br.
+07/07/2026 17:23:34 | INFO | [SecOps] Varredura Progressiva em eduardobecker.com.br
