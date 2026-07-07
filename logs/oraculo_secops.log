@@ -123,3 +123,7 @@
 06/07/2026 16:15:38 | INFO | [Relatório] Usuário 'asv' solicitou relatório FinOps/Consumo para alvo: TODOS (30.0 dias).
 06/07/2026 16:21:41 | INFO | [Relatório] Usuário 'asv' solicitou relatório FinOps/Consumo para alvo: TODOS (30.0 dias).
 06/07/2026 16:48:54 | INFO | Serving on http://0.0.0.0:5000
+07/07/2026 02:00:21 | INFO | [Backup] Disparando backup agendado...
+07/07/2026 09:02:02 | INFO | Serving on http://0.0.0.0:5000
+07/07/2026 09:02:20 | INFO | Serving on http://0.0.0.0:5000
+07/07/2026 09:02:36 | INFO | Serving on http://0.0.0.0:5000

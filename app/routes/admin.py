@@ -431,9 +431,19 @@ def db_test():
     guard = _admin_only_json()
     if guard: return guard
     data = request.json or {}
+    engine = (data.get('engine') or 'sqlite').strip().lower()
+
+    # Senha em branco = "usar a senha já salva" (o campo nunca é preenchido de
+    # volta por segurança, então testar sem digitar de novo deve usar a atual
+    # em vez de mandar senha vazia — era exatamente isso que causava o
+    # "password authentication failed" ao clicar Testar Conexão sem retypar).
+    password = data.get('password')
+    if engine == 'postgres' and not password:
+        password = db.current_config(mask_password=False).get('password') or ''
+
     ok, msg = db.test_connection(
-        data.get('engine'), host=data.get('host'), port=data.get('port'),
-        dbname=data.get('dbname'), user=data.get('user'), password=data.get('password')
+        engine, host=data.get('host'), port=data.get('port'),
+        dbname=data.get('dbname'), user=data.get('user'), password=password
     )
     return jsonify({"ok": ok, "message": msg})
 
