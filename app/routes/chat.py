@@ -6,6 +6,7 @@ from flask import Blueprint, render_template, session, redirect, url_for, reques
 from app.routes.auth import login_required
 from app.services.ai_engine import process_oraculo_message
 from app import db
+from app.services import branding
 
 bp = Blueprint('chat', __name__)
 
@@ -222,6 +223,7 @@ def download_report(scan_id):
         <html><head><meta charset="UTF-8"><title>Relatório - {target}</title>
         <style>body{{font-family:sans-serif; padding:40px; line-height:1.6; color:#333; max-width:900px; margin:auto}} h1, h2, h3{{color:#0077ff}} .code{{background:#f4f4f4; padding:20px; border-radius:8px}} a{{color:#2ea043; font-weight:bold}}</style>
         </head><body>
+        {branding.get_logo_html()}
         <h1>Oráculo SecOps - Relatório Executivo</h1>
         <hr><p><b>Alvo Auditado:</b> {target}<br><b>Data/Hora:</b> {datetime.now().strftime('%d/%m/%Y %H:%M')}</p>
         <div class='code'>{html_content}</div>

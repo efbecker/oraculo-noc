@@ -2,6 +2,7 @@ from functools import wraps
 from flask import Blueprint, request, jsonify, session, redirect, url_for, render_template
 from werkzeug.security import generate_password_hash, check_password_hash
 from app import db
+from app.services import branding
 
 bp = Blueprint('auth', __name__)
 
@@ -72,7 +73,7 @@ def login():
         except Exception as e:
             return jsonify({"error": str(e)}), 500
             
-    return render_template('login.html')
+    return render_template('login.html', logo_data_uri=branding.get_logo_data_uri())
 
 @bp.route("/logout")
 def logout():

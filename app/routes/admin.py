@@ -3,7 +3,7 @@ import secrets
 from werkzeug.security import generate_password_hash
 from flask import Blueprint, request, redirect, url_for, session, render_template_string, jsonify, send_file
 from app import db
-from app.services import backup_manager
+from app.services import backup_manager, branding
 
 bp = Blueprint('admin', __name__)
 
@@ -80,19 +80,59 @@ HTML_TEMPLATE = """
             .header div { width: 100%; display: flex; justify-content: space-between; margin-top: 5px; }
             .btn-submit { width: 100%; text-align: center; }
         }
+
+        /* ===== Shell com barra lateral (estilo Zabbix) ===== */
+        .admin-shell { display: flex; min-height: 100vh; }
+        .admin-sidebar { width: 240px; flex-shrink: 0; background: #0b1117; border-right: 1px solid #262626; display: flex; flex-direction: column; position: fixed; top: 0; left: 0; height: 100vh; overflow-y: auto; z-index: 10; }
+        .sidebar-brand { padding: 20px 18px; font-size: 17px; font-weight: bold; color: #00e5ff; border-bottom: 1px solid #1f2933; display: flex; align-items: center; gap: 8px; }
+        .sidebar-nav { flex: 1; padding: 14px 10px; display: flex; flex-direction: column; gap: 3px; }
+        .nav-item { display: flex; align-items: center; gap: 10px; padding: 11px 14px; border-radius: 6px; color: #9aa5b1; text-decoration: none; font-size: 14px; font-weight: 500; cursor: pointer; border: none; background: transparent; width: 100%; text-align: left; }
+        .nav-item:hover { background: #161d26; color: #e0e0e0; }
+        .nav-item.active { background: rgba(0,229,255,0.1); color: #00e5ff; font-weight: bold; }
+        .sidebar-footer { padding: 14px 10px; border-top: 1px solid #1f2933; display: flex; flex-direction: column; gap: 3px; }
+        .admin-content { margin-left: 240px; flex: 1; padding: 28px 32px; max-width: 1200px; }
+        .admin-tab { display: none; }
+        .admin-tab.active { display: block; }
+        .content-title { color: #00e5ff; font-size: 22px; margin: 0 0 22px 0; }
+
+        .pagination-bar { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+        .pagination-bar .page-info { font-size: 13px; color: #888; }
+        .search-box { max-width: 280px; }
+
+        @media (max-width: 900px) {
+            .admin-sidebar { position: relative; width: 100%; height: auto; }
+            .admin-content { margin-left: 0; padding: 20px; }
+            .admin-shell { flex-direction: column; }
+        }
+
+        /* Logs (aba) */
+        #logBox { background: #05080b; border: 1px solid #1f2933; border-radius: 6px; padding: 15px; height: 60vh; overflow-y: auto; font-family: "SF Mono", Consolas, monospace; font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+        .l-error { color: #ff6b6b; }
+        .l-warning { color: #ff9e00; }
+        .l-info { color: #8ea3c4; }
+        .l-default { color: #667; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>⚙️ Gestão de Clientes & Contas (Multi-Tenant)</h1>
-            <div>
-                <a href="/admin/logs" style="color: #00e5ff; margin-right: 20px; text-decoration: none; font-weight: bold; font-size: 14px; align-self: center;">📜 Logs</a>
-                <a href="/chat" style="color: #00e5ff; margin-right: 20px; text-decoration: none; font-weight: bold; font-size: 14px; align-self: center;">💬 Voltar ao Chat</a>
-                <a href="/logout" class="logout">Sair</a>
+    <div class="admin-shell">
+        <aside class="admin-sidebar">
+            <div class="sidebar-brand">🔮 Oráculo <span style="font-size:10px; background:#00e5ff; color:#0b1117; padding:2px 6px; border-radius:8px; font-weight:bold;">ADMIN</span></div>
+            <nav class="sidebar-nav">
+                <a href="#usuarios" class="nav-item" data-tab="usuarios">👤 Usuários</a>
+                <a href="#banco" class="nav-item" data-tab="banco">🗄️ Banco de Dados</a>
+                <a href="#branding" class="nav-item" data-tab="branding">🖼️ Branding</a>
+                <a href="#backup" class="nav-item" data-tab="backup">💾 Backup</a>
+                <a href="#logs" class="nav-item" data-tab="logs">📜 Logs</a>
+            </nav>
+            <div class="sidebar-footer">
+                <a href="/chat" class="nav-item">💬 Voltar ao Chat</a>
+                <a href="/logout" class="nav-item" style="color:#ff4d4d;">🚪 Sair</a>
             </div>
-        </div>
-        
+        </aside>
+
+        <main class="admin-content">
+        <section id="tab-usuarios" class="admin-tab">
+        <h2 class="content-title">👤 Usuários</h2>
         <div class="form-container">
             <h3 id="form-title" style="color: #ff9e00; margin-top: 0; margin-bottom: 20px;">Cadastrar / Atualizar Conta</h3>
             <form method="POST" action="/admin/save" id="userForm">
@@ -135,6 +175,9 @@ HTML_TEMPLATE = """
         </div>
 
         <h3>Contas Cadastradas no Oráculo</h3>
+        <div class="row-inline" style="margin-bottom: 4px;">
+            <input type="text" id="users-search" class="search-box" placeholder="Buscar por usuário ou grupo Zabbix...">
+        </div>
         <div class="table-responsive">
             <table>
                 <thead>
@@ -148,30 +191,21 @@ HTML_TEMPLATE = """
                         <th style="width: 150px;">Ações</th>
                     </tr>
                 </thead>
-                <tbody>
-                    {% for u in users %}
-                    <tr>
-                        <td>{{ u.id }}</td>
-                        <td><strong>{{ u.username }}</strong></td>
-                        <td>{{ u.profile }}</td>
-                        <td><span style="color:#ff9e00; font-family: monospace;">{{ u.grupo_cliente }}</span></td>
-                        <td><span style="color:#00e5ff; font-family: monospace; font-size: 13px;">{{ u.ai_model }}</span></td>
-                        <td><span style="color:#00e676; font-size: 12px;">{{ u.zabbix_url if u.zabbix_url else '🌍 Padrão Global (config.py)' }}</span></td>
-                        <td class="actions-cell">
-                            <button type="button" class="btn-edit" onclick="editarUsuario('{{ u.username }}', '{{ u.profile }}', '{{ u.grupo_cliente }}', '{{ u.ai_model }}', '{{ u.zabbix_url }}', '{{ u.token_zabbix }}')">Editar</button>
-                            <form method="POST" action="/admin/delete" style="margin: 0;" onsubmit="return confirm('Deseja excluir este usuário?');">
-                                <input type="hidden" name="id" value="{{ u.id }}">
-                                <button type="submit" class="btn-danger">Excluir</button>
-                            </form>
-                        </td>
-                    </tr>
-                    {% endfor %}
+                <tbody id="users-tbody">
+                    <tr><td colspan="7" style="text-align:center; color:#666;">Carregando...</td></tr>
                 </tbody>
             </table>
         </div>
+        <div class="pagination-bar">
+            <button type="button" class="btn-secondary" id="users-prev" onclick="mudarPaginaUsuarios(-1)">← Anterior</button>
+            <span class="page-info" id="users-page-info"></span>
+            <button type="button" class="btn-secondary" id="users-next" onclick="mudarPaginaUsuarios(1)">Próxima →</button>
+        </div>
+        </section>
 
+        <section id="tab-banco" class="admin-tab">
+        <h2 class="content-title">🗄️ Banco de Dados</h2>
         <div class="form-container">
-            <h3 class="card-title">🗄️ Banco de Dados</h3>
             <p style="font-size:13px; color:#aaa; margin-top:-10px;">
                 Atual: <span class="badge-engine {{ db_cfg.engine }}">{{ 'PostgreSQL' if db_cfg.engine == 'postgres' else 'SQLite (local)' }}</span>
                 {% if db_cfg.engine == 'postgres' %}— {{ db_cfg.host }}:{{ db_cfg.port }}/{{ db_cfg.dbname }}{% endif %}
@@ -212,9 +246,37 @@ HTML_TEMPLATE = """
             </div>
             <div id="db-status-msg" class="status-msg"></div>
         </div>
+        </section>
 
+        <section id="tab-branding" class="admin-tab">
+        <h2 class="content-title">🖼️ Branding</h2>
         <div class="form-container">
-            <h3 class="card-title">💾 Backup Automático</h3>
+            <p style="font-size:13px; color:#aaa; margin-top:-10px;">
+                O logo enviado aqui aparece automaticamente no topo dos relatórios gerados
+                (SecOps e VMs/FinOps). PNG, JPG, WEBP ou SVG — até 2 MB.
+            </p>
+            {% if logo.existe %}
+            <div class="row-inline" style="align-items:flex-start; margin-top:14px;">
+                <img src="{{ logo.data_uri }}" alt="Logo atual" style="max-height:70px; max-width:260px; object-fit:contain; background:#0b1117; border:1px solid #2d3748; border-radius:6px; padding:8px;">
+                <div>
+                    <p style="margin:0; font-size:13px; color:#00e676;">✅ Logo ativo — {{ logo.nome }} ({{ logo.tamanho_kb }} KB)</p>
+                    <button type="button" class="btn-danger" style="margin-top:8px;" onclick="removerLogo()">🗑️ Remover Logo</button>
+                </div>
+            </div>
+            {% else %}
+            <p style="font-size:13px; color:#666; margin-top:14px;">Nenhum logo configurado ainda — os relatórios saem sem logo no topo.</p>
+            {% endif %}
+            <div class="row-inline" style="margin-top:16px;">
+                <input type="file" id="logo-upload-file" accept=".png,.jpg,.jpeg,.webp,.svg">
+                <button type="button" class="btn-submit" onclick="enviarLogo()">📤 Enviar Logo</button>
+            </div>
+            <div id="logo-status-msg" class="status-msg"></div>
+        </div>
+        </section>
+
+        <section id="tab-backup" class="admin-tab">
+        <h2 class="content-title">💾 Backup</h2>
+        <div class="form-container">
             <div class="form-grid">
                 <div class="form-group">
                     <div class="checkbox-row">
@@ -295,9 +357,107 @@ HTML_TEMPLATE = """
                 </table>
             </div>
         </div>
+        </section>
+
+        <section id="tab-logs" class="admin-tab">
+        <h2 class="content-title">📜 Logs do Sistema</h2>
+        <div class="form-container">
+            <div class="row-inline">
+                <select id="logs-file-select"></select>
+                <select id="logs-lines-select">
+                    <option value="200">200 linhas</option>
+                    <option value="500" selected>500 linhas</option>
+                    <option value="1500">1500 linhas</option>
+                    <option value="5000">5000 linhas</option>
+                </select>
+                <input type="text" id="logs-filter-input" class="search-box" placeholder="Filtrar (ex: ERROR, username)">
+                <label class="checkbox-row"><input type="checkbox" id="logs-auto-refresh" checked> Atualizar automaticamente</label>
+                <button type="button" class="btn-submit" onclick="carregarLog()">🔄 Atualizar agora</button>
+                <button type="button" class="btn-secondary" onclick="baixarLog()">⬇️ Baixar arquivo</button>
+            </div>
+            <p class="field-hint" id="logs-meta-info"></p>
+            <div id="logBox">Selecione a aba para carregar...</div>
+        </div>
+        </section>
+        </main>
     </div>
 
     <script>
+        // ================== Navegação por abas (sidebar estilo Zabbix) ==================
+        function mostrarAba(nome) {
+            document.querySelectorAll('.admin-tab').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.nav-item[data-tab]').forEach(el => el.classList.remove('active'));
+            const alvo = document.getElementById('tab-' + nome) ? nome : 'usuarios';
+            document.getElementById('tab-' + alvo).classList.add('active');
+            const navEl = document.querySelector('.nav-item[data-tab="' + alvo + '"]');
+            if (navEl) navEl.classList.add('active');
+            history.replaceState(null, '', '#' + alvo);
+            if (alvo === 'usuarios') carregarUsuarios(1);
+            if (alvo === 'logs') { entrarAbaLogs(); } else { pararAutoRefreshLogs(); }
+        }
+        document.querySelectorAll('.nav-item[data-tab]').forEach(el => {
+            el.addEventListener('click', (ev) => { ev.preventDefault(); mostrarAba(el.dataset.tab); });
+        });
+
+        // ================== Usuários: busca + paginação (escala para milhares) ==================
+        let usersPaginaAtual = 1;
+        let usersTotalPaginas = 1;
+        let usersBuscaTimer = null;
+
+        function escapeHtml(s) {
+            return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        async function carregarUsuarios(pagina) {
+            usersPaginaAtual = pagina;
+            const q = document.getElementById('users-search').value.trim();
+            const tbody = document.getElementById('users-tbody');
+            tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color:#666;">Carregando...</td></tr>';
+            try {
+                const r = await fetch(`/admin/users/list?page=${pagina}&q=${encodeURIComponent(q)}`);
+                const data = await r.json();
+                if (!data.ok) { tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color:#ff6b6b;">Erro ao carregar usuários.</td></tr>'; return; }
+
+                usersTotalPaginas = data.total_pages;
+                if (!data.users.length) {
+                    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color:#666;">Nenhum usuário encontrado.</td></tr>';
+                } else {
+                    tbody.innerHTML = data.users.map(u => `
+                        <tr>
+                            <td>${u.id}</td>
+                            <td><strong>${escapeHtml(u.username)}</strong></td>
+                            <td>${escapeHtml(u.profile)}</td>
+                            <td><span style="color:#ff9e00; font-family: monospace;">${escapeHtml(u.grupo_cliente)}</span></td>
+                            <td><span style="color:#00e5ff; font-family: monospace; font-size: 13px;">${escapeHtml(u.ai_model)}</span></td>
+                            <td><span style="color:#00e676; font-size: 12px;">${u.zabbix_url ? escapeHtml(u.zabbix_url) : '🌍 Padrão Global (config.py)'}</span></td>
+                            <td class="actions-cell">
+                                <button type="button" class="btn-edit" onclick='editarUsuario(${JSON.stringify(u.username)}, ${JSON.stringify(u.profile)}, ${JSON.stringify(u.grupo_cliente)}, ${JSON.stringify(u.ai_model)}, ${JSON.stringify(u.zabbix_url || "")}, ${JSON.stringify(u.token_zabbix || "")})'>Editar</button>
+                                <form method="POST" action="/admin/delete" style="margin: 0;" onsubmit="return confirm('Deseja excluir este usuário?');">
+                                    <input type="hidden" name="id" value="${u.id}">
+                                    <button type="submit" class="btn-danger">Excluir</button>
+                                </form>
+                            </td>
+                        </tr>
+                    `).join('');
+                }
+
+                document.getElementById('users-page-info').innerText = `Página ${data.page} de ${data.total_pages} (${data.total} usuário${data.total === 1 ? '' : 's'})`;
+                document.getElementById('users-prev').disabled = data.page <= 1;
+                document.getElementById('users-next').disabled = data.page >= data.total_pages;
+            } catch (e) {
+                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color:#ff6b6b;">Erro de comunicação.</td></tr>';
+            }
+        }
+        function mudarPaginaUsuarios(delta) {
+            const alvo = usersPaginaAtual + delta;
+            if (alvo < 1 || alvo > usersTotalPaginas) return;
+            carregarUsuarios(alvo);
+        }
+        document.getElementById('users-search').addEventListener('input', () => {
+            clearTimeout(usersBuscaTimer);
+            usersBuscaTimer = setTimeout(() => carregarUsuarios(1), 350);  // debounce
+        });
+
         function editarUsuario(username, profile, grupo, model, url, token) {
             document.getElementById('form-title').innerHTML = "📝 Editando Conta: <strong style='color:#00e5ff;'>" + username + "</strong>";
             document.getElementById('form-username').value = username;
@@ -414,8 +574,113 @@ HTML_TEMPLATE = """
             } catch (e) { mostrarStatus('bk-upload-status-msg', false, 'Erro de comunicação: ' + e); }
         }
 
+        // ---------- Branding (Logo) ----------
+        async function enviarLogo() {
+            const fileInput = document.getElementById('logo-upload-file');
+            const file = fileInput.files[0];
+            if (!file) { mostrarStatus('logo-status-msg', false, 'Selecione uma imagem primeiro.'); return; }
+            mostrarStatus('logo-status-msg', true, '🔄 Enviando logo...');
+            const formData = new FormData();
+            formData.append('logo_file', file);
+            try {
+                const r = await fetch('/admin/branding/upload', { method: 'POST', body: formData });
+                const data = await r.json();
+                mostrarStatus('logo-status-msg', data.ok, data.message);
+                if (data.ok) setTimeout(() => window.location.reload(), 1200);
+            } catch (e) { mostrarStatus('logo-status-msg', false, 'Erro de comunicação: ' + e); }
+        }
+        async function removerLogo() {
+            if (!confirm('Remover o logo atual? Os relatórios voltam a sair sem logo.')) return;
+            try {
+                const r = await fetch('/admin/branding/remove', { method: 'POST' });
+                const data = await r.json();
+                mostrarStatus('logo-status-msg', data.ok, data.message);
+                if (data.ok) setTimeout(() => window.location.reload(), 800);
+            } catch (e) { mostrarStatus('logo-status-msg', false, 'Erro de comunicação: ' + e); }
+        }
+
+        // ================== Logs (aba) ==================
+        let logsArquivosCarregados = false;
+        let logsAutoTimer = null;
+        let logsUltimasLinhas = [];
+
+        async function entrarAbaLogs() {
+            if (!logsArquivosCarregados) {
+                try {
+                    const r = await fetch('/admin/logs/files');
+                    const data = await r.json();
+                    const sel = document.getElementById('logs-file-select');
+                    if (data.ok && data.files.length) {
+                        sel.innerHTML = data.files.map(f => `<option value="${f}">${f}</option>`).join('');
+                        logsArquivosCarregados = true;
+                    } else {
+                        document.getElementById('logBox').innerHTML = '<div style="color:#556; text-align:center; padding:40px;">Nenhum arquivo .log encontrado.</div>';
+                        return;
+                    }
+                } catch (e) {
+                    document.getElementById('logBox').innerHTML = '<div style="color:#ff6b6b; text-align:center; padding:40px;">Erro ao listar logs.</div>';
+                    return;
+                }
+            }
+            carregarLog();
+            reiniciarAutoRefreshLogs();
+        }
+
+        function corDaLinhaLog(linha) {
+            if (/\|\s*ERROR\s*\|/.test(linha)) return 'l-error';
+            if (/\|\s*WARNING\s*\|/.test(linha)) return 'l-warning';
+            if (/\|\s*INFO\s*\|/.test(linha)) return 'l-info';
+            return 'l-default';
+        }
+        function renderizarLog() {
+            const filtro = document.getElementById('logs-filter-input').value.trim().toLowerCase();
+            const box = document.getElementById('logBox');
+            const linhasFiltradas = filtro ? logsUltimasLinhas.filter(l => l.toLowerCase().includes(filtro)) : logsUltimasLinhas;
+            const estavaNoFim = (box.scrollTop + box.clientHeight) >= (box.scrollHeight - 40);
+            box.innerHTML = linhasFiltradas.map(l => {
+                const seguro = escapeHtml(l);
+                return `<div class="${corDaLinhaLog(l)}">${seguro}</div>`;
+            }).join('') || '<div style="color:#556; text-align:center; padding:20px;">Nenhuma linha corresponde ao filtro.</div>';
+            if (estavaNoFim) box.scrollTop = box.scrollHeight;
+        }
+        async function carregarLog() {
+            const file = document.getElementById('logs-file-select').value;
+            if (!file) return;
+            const lines = document.getElementById('logs-lines-select').value;
+            try {
+                const r = await fetch(`/admin/logs/tail?file=${encodeURIComponent(file)}&lines=${lines}`);
+                const data = await r.json();
+                if (!data.ok) { document.getElementById('logBox').innerHTML = '<div style="color:#ff6b6b;">' + escapeHtml(data.message) + '</div>'; return; }
+                logsUltimasLinhas = data.lines || [];
+                renderizarLog();
+                const kb = (data.size / 1024).toFixed(1);
+                const dt = new Date(data.mtime * 1000).toLocaleString('pt-BR');
+                document.getElementById('logs-meta-info').innerText = `${data.file} — ${kb} KB — última modificação: ${dt}`;
+            } catch (e) {
+                document.getElementById('logBox').innerHTML = '<div style="color:#ff6b6b;">Erro ao carregar o log.</div>';
+            }
+        }
+        function baixarLog() {
+            const file = document.getElementById('logs-file-select').value;
+            if (file) window.location.href = `/admin/logs/download/${encodeURIComponent(file)}`;
+        }
+        function reiniciarAutoRefreshLogs() {
+            pararAutoRefreshLogs();
+            if (document.getElementById('logs-auto-refresh').checked) {
+                logsAutoTimer = setInterval(carregarLog, 4000);
+            }
+        }
+        function pararAutoRefreshLogs() {
+            if (logsAutoTimer) { clearInterval(logsAutoTimer); logsAutoTimer = null; }
+        }
+        document.getElementById('logs-file-select').addEventListener('change', carregarLog);
+        document.getElementById('logs-lines-select').addEventListener('change', carregarLog);
+        document.getElementById('logs-filter-input').addEventListener('input', renderizarLog);
+        document.getElementById('logs-auto-refresh').addEventListener('change', reiniciarAutoRefreshLogs);
+
         toggleDbFields();
         toggleWeekdayField();
+        mostrarAba((location.hash || '#usuarios').slice(1));
     </script>
 </body>
 </html>
@@ -426,13 +691,51 @@ HTML_TEMPLATE = """
 def index():
     if session.get('profile') not in ['ADMIN', 'ADMINISTRADOR']:
         return "Acesso Negado.", 403
-    users = db.query_all("SELECT id, username, password, profile, grupo_cliente, token_zabbix, zabbix_url, ai_model FROM users")
+    # A tabela de usuários NÃO é mais embutida aqui (com milhares de contas,
+    # renderizar tudo de uma vez travaria a página) — ela é carregada via
+    # /admin/users/list, paginada, pelo JS assim que a aba "Usuários" abre.
     return render_template_string(
-        HTML_TEMPLATE, users=users,
+        HTML_TEMPLATE,
         db_cfg=db.current_config(),
         backup_cfg=backup_manager.load_config(),
         backups=backup_manager.historico(),
+        logo=branding.logo_info(),
     )
+
+
+@bp.route('/admin/users/list', methods=['GET'])
+def users_list():
+    guard = _admin_only_json()
+    if guard: return guard
+
+    try:
+        page = max(1, int(request.args.get('page', 1) or 1))
+    except (TypeError, ValueError):
+        page = 1
+    per_page = 25
+    q = (request.args.get('q') or '').strip()
+
+    where, params = "", []
+    if q:
+        where = "WHERE username LIKE ? OR grupo_cliente LIKE ?"
+        params = [f"%{q}%", f"%{q}%"]
+
+    total_row = db.query_one(f"SELECT COUNT(*) as c FROM users {where}", tuple(params))
+    total = total_row['c'] if total_row else 0
+    total_pages = max(1, -(-total // per_page))  # divisão "pra cima" sem importar math
+    page = min(page, total_pages)
+    offset = (page - 1) * per_page
+
+    rows = db.query_all(
+        f"SELECT id, username, profile, grupo_cliente, ai_model, zabbix_url, token_zabbix "
+        f"FROM users {where} ORDER BY username ASC LIMIT ? OFFSET ?",
+        tuple(params) + (per_page, offset)
+    )
+    return jsonify({
+        "ok": True, "users": rows, "total": total,
+        "page": page, "per_page": per_page, "total_pages": total_pages,
+    })
+
 
 @bp.route('/admin/save', methods=['POST'])
 @bp.route('/save', methods=['POST'])
@@ -620,3 +923,20 @@ def backup_restore_upload():
                 os.remove(tmp_path)
             except Exception:
                 pass
+
+
+@bp.route('/admin/branding/upload', methods=['POST'])
+def branding_upload():
+    guard = _admin_only_json()
+    if guard: return guard
+    f = request.files.get('logo_file')
+    ok, msg = branding.salvar_logo(f)
+    return jsonify({"ok": ok, "message": msg})
+
+
+@bp.route('/admin/branding/remove', methods=['POST'])
+def branding_remove():
+    guard = _admin_only_json()
+    if guard: return guard
+    branding.remover_logo()
+    return jsonify({"ok": True, "message": "Logo removido."})

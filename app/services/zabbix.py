@@ -7,6 +7,7 @@ import io
 import base64
 from datetime import datetime
 from config import ZABBIX_URL
+from app.services import branding
 
 import matplotlib
 matplotlib.use('Agg')
@@ -742,6 +743,7 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
             .status-dot{{display:inline-block; width:14px; height:14px; border-radius:50%; margin-right:10px; vertical-align:middle;}}
             .green{{background:#00e676; box-shadow: 0 0 8px #00e676;}}
         </style></head><body><div class='container'>
+        {branding.get_logo_html()}
         <h1>Dashboard Executivo & FinOps | {grupo}</h1>
         <div class='report-info'><strong>Período de Análise:</strong> Últimos {dias} dias<br><strong>Gerado em:</strong> {datetime.now().strftime('%d/%m/%Y %H:%M')}</div>
 

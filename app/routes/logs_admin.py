@@ -71,6 +71,13 @@ def logs_page():
     return render_template_string(LOGS_TEMPLATE, arquivos=_listar_arquivos())
 
 
+@bp.route('/admin/logs/files', methods=['GET'])
+def logs_files():
+    guard = _admin_guard_json()
+    if guard: return guard
+    return jsonify({"ok": True, "files": [a["name"] for a in _listar_arquivos()]})
+
+
 @bp.route('/admin/logs/tail', methods=['GET'])
 def logs_tail():
     guard = _admin_guard_json()
