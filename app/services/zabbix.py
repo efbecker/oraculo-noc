@@ -60,6 +60,14 @@ STATIC_DIR = os.path.join(os.getcwd(), 'app', 'static')
 os.makedirs(STATIC_DIR, exist_ok=True)
 
 # A MÁGICA COMEÇA AQUI: Recebe a URL do cliente, se não tiver, usa a padrão
+def _chunks(lista, tamanho):
+    """Divide uma lista em pedaços menores — usado pra não mandar UMA chamada
+    gigante (todos os itens de dezenas de hosts de uma vez) pro Zabbix, que é
+    o que estava causando timeout/resposta vazia em ambientes grandes."""
+    for i in range(0, len(lista), tamanho):
+        yield lista[i:i + tamanho]
+
+
 def zabbix_api(method, params, token, url=None):
     if not token: raise ValueError("Token do Zabbix não configurado.")
     endpoint = url if url else ZABBIX_URL
@@ -80,7 +88,30 @@ def zabbix_api(method, params, token, url=None):
     }
     
     import requests
-    resposta = requests.post(endpoint, json=payload, headers=headers, timeout=45).json()
+    try:
+        http_resp = requests.post(endpoint, json=payload, headers=headers, timeout=90)
+    except requests.exceptions.Timeout:
+        raise Exception(
+            f"O Zabbix não respondeu a tempo para '{method}' (ambiente grande demais para "
+            f"uma única consulta?). Tente novamente ou reduza o período do relatório."
+        )
+    except requests.exceptions.RequestException as e:
+        raise Exception(f"Falha de conexão com o Zabbix ao chamar '{method}': {e}")
+
+    try:
+        resposta = http_resp.json()
+    except ValueError:
+        # O Zabbix (ou um proxy/nginx na frente dele) devolveu algo que não é
+        # JSON — normalmente um timeout do PHP ou uma página de erro HTML.
+        # Isso é exatamente o que gerava o antigo "Expecting value: line 1
+        # column 1 (char 0)", sem dizer o que realmente aconteceu.
+        trecho = (http_resp.text or "")[:200].strip().replace("\n", " ")
+        raise Exception(
+            f"O Zabbix devolveu uma resposta inválida para '{method}' "
+            f"(HTTP {http_resp.status_code}){': ' + trecho if trecho else ' (corpo vazio)'}. "
+            f"Provavelmente um timeout no servidor do Zabbix ao processar uma consulta grande."
+        )
+
     if 'error' in resposta: 
         raise Exception(f"{resposta['error'].get('data')}")
     return resposta.get('result', [])
@@ -93,21 +124,25 @@ def fetch_historical_data(items_list, hora_passada, hora_atual, dias, token, url
         vt = int(it.get('value_type', 3))
         if vt not in by_type: by_type[vt] = []
         by_type[vt].append(it['itemid'])
+
+    TAMANHO_LOTE = 150  # itens por chamada — evita uma consulta gigante que
+                         # estoura o tempo/memória do Zabbix em ambientes grandes
         
     for vt, iids in by_type.items():
         found_iids = set()
         if dias > 1:
-            hist_data = zabbix_api("trend.get", {"itemids": iids, "time_from": hora_passada, "time_till": hora_atual, "limit": 200000}, token, url)
-            for row in hist_data:
-                iid = row['itemid']
-                if iid not in hist_by_item: hist_by_item[iid] = []
-                hist_by_item[iid].append(row)
-                found_iids.add(iid)
+            for lote in _chunks(iids, TAMANHO_LOTE):
+                hist_data = zabbix_api("trend.get", {"itemids": lote, "time_from": hora_passada, "time_till": hora_atual, "limit": 200000}, token, url)
+                for row in hist_data:
+                    iid = row['itemid']
+                    if iid not in hist_by_item: hist_by_item[iid] = []
+                    hist_by_item[iid].append(row)
+                    found_iids.add(iid)
         
         missing = [i for i in iids if i not in found_iids]
-        if missing:
+        for lote in _chunks(missing, TAMANHO_LOTE):
             hist_fallback = zabbix_api("history.get", {
-                "itemids": missing, "history": vt, "time_from": hora_passada, "time_till": hora_atual, "limit": 200000
+                "itemids": lote, "history": vt, "time_from": hora_passada, "time_till": hora_atual, "limit": 200000
             }, token, url)
             for row in hist_fallback:
                 iid = row['itemid']
@@ -354,13 +389,15 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
                 hosts = parciais
         
         host_ids = [h['hostid'] for h in hosts]
-        items = zabbix_api("item.get", {
-            "hostids": host_ids,
-            "filter": {"status": "0", "value_type": ["0", "3"]},
-            "output": ["itemid", "hostid", "name", "value_type", "units", "key_"]
-        }, token, url)
+        items = []
+        for lote_hosts in _chunks(host_ids, 20):
+            items.extend(zabbix_api("item.get", {
+                "hostids": lote_hosts,
+                "filter": {"status": "0", "value_type": ["0", "3"]},
+                "output": ["itemid", "hostid", "name", "value_type", "units", "key_", "lastvalue", "lastclock"]
+            }, token, url))
         
-        host_items = {h['hostid']: {'cpu': [], 'mem': [], 'nets': {}, 'vpn_users': [], 'disks': [], '_disk_map': {}, 'cpu_total': None, 'mem_total': None} for h in hosts}
+        host_items = {h['hostid']: {'cpu': [], 'mem': [], 'nets': {}, 'vpn_users': [], 'disks': [], '_disk_map': {}, 'cpu_total': None, 'mem_total': None, 'uptime': None} for h in hosts}
         
         def is_valid_net(nl):
             return not re.search(r'\b(loopback|lo|veth|docker|speed|velocidade|drop|error|discard|status|estado|ssl)\b', nl)
@@ -460,6 +497,7 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
 
             if 'cpu' in nl and re.search(r'\b(num|número|count|core)\b', nl): host_items[hid]['cpu_total'] = it
             elif re.search(r'\b(mem|memória|memory)\b', nl) and 'total' in nl and 'uso' not in nl: host_items[hid]['mem_total'] = it
+            elif 'osuptime' in it.get('key_', '').lower(): host_items[hid]['uptime'] = it
 
             if 'cpu' in nl and re.search(r'\b(uso|usage|util|percent)\b', nl): host_items[hid]['cpu'].append(it)
             elif re.search(r'\b(mem|memória|memory)\b', nl) and re.search(r'\b(uso|usage|util|percent)\b', nl): host_items[hid]['mem'].append(it)
@@ -589,8 +627,19 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
             if total_rows > 0:
                 gs = gridspec.GridSpec(total_rows, 1, figure=fig, hspace=0.5)
 
-            c_str, m_str, ni_str, no_str, vpn_str, d_str_resumo = "N/A", "N/A", "N/A", "N/A", "N/A", "N/A"
+            c_str, m_str, ni_str, no_str, vpn_str, d_str_resumo, u_str = "N/A", "N/A", "N/A", "N/A", "N/A", "N/A", "N/A"
             insights_finops = []
+
+            # Uptime: usa o valor MAIS RECENTE (lastvalue), não uma média sobre o
+            # período — uptime é um contador crescente, então a "média" ao longo de
+            # 30 dias subestimaria bastante o tempo online atual da VM.
+            item_uptime = h_it.get('uptime')
+            if item_uptime and item_uptime.get('lastvalue') not in (None, ''):
+                try:
+                    segundos_uptime = float(item_uptime['lastvalue'])
+                    u_str = _formatar_duracao(segundos_uptime) if segundos_uptime > 0 else "Desligada"
+                except (TypeError, ValueError):
+                    u_str = "N/A"
 
             def extract_and_plot(it, ax, plot_kw):
                 if it and it['itemid'] in hist_by_item:
@@ -753,7 +802,7 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
                         CPU: <strong style='color:#00e5ff'>{c_str}</strong><br>
                         Memória: <strong style='color:#ff9e00'>{m_str}</strong><br>
                         Discos: <strong style='color:#00e676'>{d_str_resumo}</strong><br>
-                        Rede Média: <strong style='color:#b100e8'>↓{ni_str} ↑{no_str}</strong>
+                        Rede Média: <strong style='color:#b100e8'>↓{ni_str} ↑{no_str}</strong>{f"<br>Uptime: <strong style='color:#3fb950'>{u_str}</strong>" if u_str != "N/A" else ""}
                     </div>
                 """
                 tab_resumo = f"<td style='color:#ccc; font-family: monospace;'>CPU: {c_str} | RAM: {m_str} | Disco: {d_str_resumo} | Rede: ↓{ni_str} ↑{no_str}</td>"

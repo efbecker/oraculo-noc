@@ -202,3 +202,14 @@
 09/07/2026 10:08:54 | INFO | [IA Oracle] Usuário 'asv' iniciou interação livre com o modelo.
 09/07/2026 10:09:02 | INFO | [IA Oracle] Usuário 'asv' iniciou interação livre com o modelo.
 09/07/2026 10:09:17 | INFO | [IA Oracle] Usuário 'asv' iniciou interação livre com o modelo.
+09/07/2026 10:13:09 | INFO | Serving on http://0.0.0.0:5000
+09/07/2026 10:13:25 | INFO | [IA Oracle] Usuário 'pollux' iniciou interação livre com o modelo.
+09/07/2026 10:20:56 | INFO | Serving on http://0.0.0.0:5000
+09/07/2026 10:21:10 | INFO | [Relatório] Usuário 'pollux' solicitou relatório FinOps/Consumo para alvo: TODOS (30.0 dias).
+09/07/2026 10:21:39 | INFO | [Relatório] Usuário 'asv' solicitou relatório FinOps/Consumo para alvo: TODOS (30.0 dias).
+09/07/2026 10:22:09 | INFO | [IA Oracle] Usuário 'asv' iniciou interação livre com o modelo.
+09/07/2026 10:22:25 | INFO | [IA Oracle] Usuário 'asv' iniciou interação livre com o modelo.
+09/07/2026 10:36:38 | INFO | [IA Oracle] Usuário 'cpb' iniciou interação livre com o modelo.
+09/07/2026 10:37:26 | INFO | [Relatório] Usuário 'cpb' solicitou relatório FinOps/Consumo para alvo: TODOS (30.0 dias).
+09/07/2026 10:39:02 | INFO | [IA Oracle] Usuário 'cpb' iniciou interação livre com o modelo.
+09/07/2026 10:42:37 | INFO | [IA Oracle] Usuário 'cpb' iniciou interação livre com o modelo.
