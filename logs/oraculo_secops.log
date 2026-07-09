@@ -213,3 +213,10 @@
 09/07/2026 10:37:26 | INFO | [Relatório] Usuário 'cpb' solicitou relatório FinOps/Consumo para alvo: TODOS (30.0 dias).
 09/07/2026 10:39:02 | INFO | [IA Oracle] Usuário 'cpb' iniciou interação livre com o modelo.
 09/07/2026 10:42:37 | INFO | [IA Oracle] Usuário 'cpb' iniciou interação livre com o modelo.
+09/07/2026 10:48:08 | INFO | Serving on http://0.0.0.0:5000
+09/07/2026 10:49:09 | INFO | [Relatório] Usuário 'cpb' solicitou relatório FinOps/Consumo para alvo: TODOS (30.0 dias).
+09/07/2026 13:44:35 | INFO | Serving on http://0.0.0.0:5000
+09/07/2026 13:44:47 | INFO | [Relatório] Usuário 'cpb' solicitou relatório FinOps/Consumo para alvo: TODOS (30.0 dias).
+09/07/2026 13:47:38 | INFO | [IA Oracle] Usuário 'schulze' iniciou interação livre com o modelo.
+09/07/2026 13:48:38 | INFO | [IA Oracle] Usuário 'schulze' iniciou interação livre com o modelo.
+09/07/2026 14:03:54 | INFO | [Relatório] Usuário 'schulze' solicitou relatório FinOps/Consumo para alvo: TODOS (30.0 dias).

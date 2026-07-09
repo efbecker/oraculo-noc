@@ -68,6 +68,13 @@ def _chunks(lista, tamanho):
         yield lista[i:i + tamanho]
 
 
+class ZabbixConsultaPesadaError(Exception):
+    """Sinaliza que o Zabbix não aguentou a consulta (timeout ou HTTP 5xx com
+    resposta inválida/vazia). Quem chama pode reagir dividindo o lote em
+    pedaços menores em vez de derrubar o relatório inteiro."""
+    pass
+
+
 def zabbix_api(method, params, token, url=None):
     if not token: raise ValueError("Token do Zabbix não configurado.")
     endpoint = url if url else ZABBIX_URL
@@ -91,7 +98,7 @@ def zabbix_api(method, params, token, url=None):
     try:
         http_resp = requests.post(endpoint, json=payload, headers=headers, timeout=90)
     except requests.exceptions.Timeout:
-        raise Exception(
+        raise ZabbixConsultaPesadaError(
             f"O Zabbix não respondeu a tempo para '{method}' (ambiente grande demais para "
             f"uma única consulta?). Tente novamente ou reduza o período do relatório."
         )
@@ -106,7 +113,7 @@ def zabbix_api(method, params, token, url=None):
         # Isso é exatamente o que gerava o antigo "Expecting value: line 1
         # column 1 (char 0)", sem dizer o que realmente aconteceu.
         trecho = (http_resp.text or "")[:200].strip().replace("\n", " ")
-        raise Exception(
+        raise ZabbixConsultaPesadaError(
             f"O Zabbix devolveu uma resposta inválida para '{method}' "
             f"(HTTP {http_resp.status_code}){': ' + trecho if trecho else ' (corpo vazio)'}. "
             f"Provavelmente um timeout no servidor do Zabbix ao processar uma consulta grande."
@@ -115,6 +122,50 @@ def zabbix_api(method, params, token, url=None):
     if 'error' in resposta: 
         raise Exception(f"{resposta['error'].get('data')}")
     return resposta.get('result', [])
+TAMANHO_LOTE = 50   # itens por chamada — 150 ainda estourava (HTTP 500 vazio)
+                    # em ambientes grandes; 50 é o novo ponto de partida seguro.
+LOTE_MINIMO = 5     # abaixo disso, para de dividir por itens e divide o PERÍODO.
+JANELA_MINIMA = 6 * 3600  # não divide o período em janelas menores que 6h.
+
+
+def _consulta_historico_adaptativa(method, params_base, itemids, time_from, time_till, token, url):
+    """Consulta trend.get/history.get com resiliência: se o Zabbix estourar
+    (timeout ou HTTP 5xx com corpo vazio — ZabbixConsultaPesadaError), divide o
+    lote de itens ao meio e tenta de novo. Se mesmo com LOTE_MINIMO itens ainda
+    falhar, divide o PERÍODO ao meio (consultas de janelas menores são muito
+    mais leves pro banco do Zabbix). Só desiste de um pedaço quando não dá mais
+    pra dividir nada — e mesmo assim devolve o que conseguiu, em vez de matar o
+    relatório inteiro com uma exceção.
+
+    Retorna (rows, itemids_perdidos)."""
+    rows, perdidos = [], []
+    # Fila de pendências: cada entrada é (lista_de_itemids, time_from, time_till)
+    fila = [(list(itemids), time_from, time_till)]
+    while fila:
+        lote, tf, tt = fila.pop()
+        try:
+            rows.extend(zabbix_api(
+                method,
+                {**params_base, "itemids": lote, "time_from": tf, "time_till": tt},
+                token, url
+            ))
+        except ZabbixConsultaPesadaError:
+            time.sleep(0.5)  # dá um respiro pro servidor antes de re-tentar
+            if len(lote) > LOTE_MINIMO:
+                meio = len(lote) // 2
+                fila.append((lote[:meio], tf, tt))
+                fila.append((lote[meio:], tf, tt))
+            elif (tt - tf) > JANELA_MINIMA:
+                meio_t = (tf + tt) // 2
+                fila.append((lote, tf, meio_t))
+                fila.append((lote, meio_t + 1, tt))
+            else:
+                # Menor unidade possível ainda estoura: pula esses itens nessa
+                # janela, mas o resto do relatório segue vivo.
+                perdidos.extend(lote)
+    return rows, perdidos
+
+
 def fetch_historical_data(items_list, hora_passada, hora_atual, dias, token, url=None):
     hist_by_item = {}
     if not items_list: return hist_by_item
@@ -125,29 +176,50 @@ def fetch_historical_data(items_list, hora_passada, hora_atual, dias, token, url
         if vt not in by_type: by_type[vt] = []
         by_type[vt].append(it['itemid'])
 
-    TAMANHO_LOTE = 150  # itens por chamada — evita uma consulta gigante que
-                         # estoura o tempo/memória do Zabbix em ambientes grandes
-        
+    itens_perdidos = []
+
     for vt, iids in by_type.items():
         found_iids = set()
         if dias > 1:
             for lote in _chunks(iids, TAMANHO_LOTE):
-                hist_data = zabbix_api("trend.get", {"itemids": lote, "time_from": hora_passada, "time_till": hora_atual, "limit": 200000}, token, url)
+                # "output" enxuto: o relatório só usa itemid/clock/value_avg.
+                # Sem isso o trend.get devolve também num/value_min/value_max,
+                # ~60% de payload a mais à toa — peso que contribuía pro 500.
+                hist_data, perdidos = _consulta_historico_adaptativa(
+                    "trend.get",
+                    {"output": ["itemid", "clock", "value_avg"], "limit": 200000},
+                    lote, hora_passada, hora_atual, token, url
+                )
+                itens_perdidos.extend(perdidos)
                 for row in hist_data:
                     iid = row['itemid']
                     if iid not in hist_by_item: hist_by_item[iid] = []
                     hist_by_item[iid].append(row)
                     found_iids.add(iid)
-        
+
         missing = [i for i in iids if i not in found_iids]
         for lote in _chunks(missing, TAMANHO_LOTE):
-            hist_fallback = zabbix_api("history.get", {
-                "itemids": lote, "history": vt, "time_from": hora_passada, "time_till": hora_atual, "limit": 200000
-            }, token, url)
+            hist_fallback, perdidos = _consulta_historico_adaptativa(
+                "history.get",
+                {"output": ["itemid", "clock", "value"], "history": vt, "limit": 200000},
+                lote, hora_passada, hora_atual, token, url
+            )
+            itens_perdidos.extend(perdidos)
             for row in hist_fallback:
                 iid = row['itemid']
                 if iid not in hist_by_item: hist_by_item[iid] = []
                 hist_by_item[iid].append(row)
+
+    if itens_perdidos:
+        # Não derruba o relatório: só registra no log do app quais itens o
+        # Zabbix não conseguiu entregar nem na menor granularidade possível.
+        print(f"[zabbix] Aviso: {len(set(itens_perdidos))} itens ficaram sem histórico "
+              f"(Zabbix estourou mesmo nas menores consultas): {sorted(set(itens_perdidos))[:20]}")
+
+    # trend.get devolvido em janelas pode vir fora de ordem cronológica;
+    # ordena por clock pra os gráficos não ficarem com linhas "voltando no tempo".
+    for iid in hist_by_item:
+        hist_by_item[iid].sort(key=lambda r: int(r['clock']))
 
     return hist_by_item
 
