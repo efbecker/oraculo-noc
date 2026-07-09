@@ -206,10 +206,11 @@ def download_report(scan_id):
         target = row['target']
         ai_text = json.loads(row['result_json']).get("ai_analysis", "")
         
-        # Transforma cada CVE-xxxx-xxxx em link clicável para o NVD (antes das demais conversões).
+        # Transforma cada CVE-xxxx-xxxx em link clicável para o NVD (cor ajustada
+        # pro tema escuro — o vermelho escuro original ficava ilegível no fundo dark).
         ai_text = re.sub(
             r'\bCVE-\d{4}-\d{4,7}\b',
-            lambda m: f'<a href="https://nvd.nist.gov/vuln/detail/{m.group(0)}" target="_blank" style="color:#c0392b; font-weight:bold">{m.group(0)}</a>',
+            lambda m: f'<a href="https://nvd.nist.gov/vuln/detail/{m.group(0)}" target="_blank" style="color:#ff6b6b; font-weight:bold;">{m.group(0)}</a>',
             ai_text
         )
         html_content = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', ai_text)
@@ -219,16 +220,31 @@ def download_report(scan_id):
         html_content = re.sub(r'\[(.*?)\]\((.*?)\)', r'<a href="\2" target="_blank">\1</a>', html_content)
         html_content = html_content.replace('\n', '<br>')
         
+        # Mesmo tema escuro do relatório de VMs/FinOps (mesmas cores/classes),
+        # pra manter os dois relatórios visualmente consistentes.
         html = f"""
-        <html><head><meta charset="UTF-8"><title>Relatório - {target}</title>
-        <style>body{{font-family:sans-serif; padding:40px; line-height:1.6; color:#333; max-width:900px; margin:auto}} h1, h2, h3{{color:#0077ff}} .code{{background:#f4f4f4; padding:20px; border-radius:8px}} a{{color:#2ea043; font-weight:bold}}</style>
-        </head><body>
+        <html><head><meta charset="UTF-8"><title>Relatório SecOps - {target}</title>
+        <style>
+            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background:#121212; color:#e0e0e0; margin:0; padding:20px; }}
+            .container {{ max-width:900px; margin:auto; background:#161616; padding:40px; border-radius:12px; box-shadow:0 10px 40px rgba(0,0,0,0.8); border: 1px solid #2a2a2a; }}
+            h1 {{ text-align:center; color:#00e5ff; margin-bottom:10px; font-size:32px; font-weight:700; letter-spacing: 1px; }}
+            .report-info {{ text-align:center; color:#888; font-size:14px; margin-bottom:30px; padding-bottom:15px; border-bottom: 1px solid #333; }}
+            .report-info b {{ color:#ccc; }}
+            .content-box {{ background:#1c1c1c; border: 1px solid #2a2a2a; border-radius:8px; padding:25px 30px; line-height:1.7; font-size:15px; }}
+            .content-box h1, .content-box h2, .content-box h3 {{ color:#00e5ff; margin-top:26px; margin-bottom:12px; }}
+            .content-box h1:first-child, .content-box h2:first-child, .content-box h3:first-child {{ margin-top:0; }}
+            .content-box b {{ color:#fff; }}
+            .content-box a {{ color:#00e676; font-weight:bold; text-decoration:none; }}
+            .content-box a:hover {{ text-decoration:underline; }}
+            .footer-note {{ text-align:center; font-size:0.8em; color:#666; margin-top:35px; }}
+        </style>
+        </head><body><div class="container">
         {branding.get_logo_html()}
-        <h1>Oráculo SecOps - Relatório Executivo</h1>
-        <hr><p><b>Alvo Auditado:</b> {target}<br><b>Data/Hora:</b> {datetime.now().strftime('%d/%m/%Y %H:%M')}</p>
-        <div class='code'>{html_content}</div>
-        <p style='text-align:center; font-size:0.8em; margin-top:50px'>Gerado por Oráculo Armazem Cloud</p>
-        </body></html>
+        <h1>🛡️ Oráculo SecOps - Relatório Executivo</h1>
+        <div class="report-info"><b>Alvo Auditado:</b> {target}<br><b>Data/Hora:</b> {datetime.now().strftime('%d/%m/%Y %H:%M')}</div>
+        <div class="content-box">{html_content}</div>
+        <p class="footer-note">Gerado por Oráculo Armazem Cloud</p>
+        </div></body></html>
         """
         
         return Response(

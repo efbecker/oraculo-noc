@@ -168,6 +168,24 @@ def process_series(t_data, base_unit, item_name=""):
                 final_unit = final_unit if final_unit else ""
     return t, v, final_unit
 
+def _formatar_duracao(segundos):
+    """Converte segundos de uptime em texto humano ('3 dias, 4h')."""
+    try:
+        segundos = int(float(segundos))
+    except (TypeError, ValueError):
+        return "tempo desconhecido"
+    if segundos < 0:
+        return "tempo desconhecido"
+    dias, resto = divmod(segundos, 86400)
+    horas, resto = divmod(resto, 3600)
+    minutos, _ = divmod(resto, 60)
+    partes = []
+    if dias: partes.append(f"{dias} dia{'s' if dias != 1 else ''}")
+    if horas: partes.append(f"{horas}h")
+    if not dias and minutos: partes.append(f"{minutos}min")
+    return ", ".join(partes) if partes else "menos de 1 minuto"
+
+
 def consultar_status_host_zabbix(nome_alvo: str, token: str, grupo: str, url: str = None) -> str:
     params = {"output": ["hostid", "host", "name", "status"], "selectInterfaces": ["ip", "dns", "useip"]}
     if nome_alvo and nome_alvo.lower() not in ['ambiente', 'meu ambiente', 'infraestrutura', 'tudo', 'geral']:
@@ -179,6 +197,28 @@ def consultar_status_host_zabbix(nome_alvo: str, token: str, grupo: str, url: st
     try:
         hosts = zabbix_api("host.get", params, token, url)
         if not hosts: return f"Nenhum servidor localizado no seu grupo ({grupo})."
+
+        hostids = [h['hostid'] for h in hosts]
+
+        # Busca o item real de UPTIME ("Tempo que a VM está online",
+        # vmware.vm.guest.osuptime) em vez de confiar na flag host['status'],
+        # que só diz se o MONITORAMENTO está habilitado na configuração do
+        # Zabbix — não se a VM está de fato ligada e respondendo agora.
+        uptime_por_host = {}
+        try:
+            itens_uptime = zabbix_api("item.get", {
+                "hostids": hostids,
+                "search": {"key_": "osuptime"},
+                "output": ["hostid", "lastvalue", "lastclock"]
+            }, token, url)
+            for it in itens_uptime:
+                uptime_por_host[it['hostid']] = it
+        except Exception:
+            pass  # segue sem uptime — cai no fallback pelo status de configuração
+
+        agora = time.time()
+        JANELA_DADOS_FRESCOS = 30 * 60  # 30 min sem coleta nova = dado "parado"/suspeito
+
         respostas = []
         for vm in hosts:
             conexao = "Monitoramento via API" 
@@ -186,7 +226,27 @@ def consultar_status_host_zabbix(nome_alvo: str, token: str, grupo: str, url: st
                 interface = vm['interfaces'][0]
                 if interface.get('useip') == '1' and interface.get('ip'): conexao = f"IP: {interface.get('ip')}"
                 elif interface.get('useip') == '0' and interface.get('dns'): conexao = f"DNS: {interface.get('dns')}"
-            status_str = '🟢 Online' if vm['status'] == '0' else '🔴 Offline/Inativo'
+
+            item_up = uptime_por_host.get(vm['hostid'])
+            if item_up and item_up.get('lastvalue') not in (None, ''):
+                idade_dado = agora - int(item_up.get('lastclock') or 0)
+                try:
+                    segundos_uptime = float(item_up['lastvalue'])
+                except (TypeError, ValueError):
+                    segundos_uptime = None
+
+                if idade_dado > JANELA_DADOS_FRESCOS:
+                    status_str = f"⚠️ Sem dados recentes (última coleta há {int(idade_dado // 60)} min)"
+                elif segundos_uptime is not None and segundos_uptime > 0:
+                    status_str = f"🟢 Online há {_formatar_duracao(segundos_uptime)}"
+                else:
+                    status_str = "🔴 Desligada (uptime zerado)"
+            else:
+                # Sem item de uptime (ex.: firewalls/appliances não-VMware) —
+                # cai no status de configuração, mas deixando claro que é só
+                # "monitoramento habilitado", não confirmação de disponibilidade real.
+                status_str = '🟢 Monitoramento ativo' if vm['status'] == '0' else '🔴 Monitoramento desativado'
+
             respostas.append(f"* **{vm['name']}** | {conexao} | Status: {status_str}\n\n")
         return f"### Status da Infraestrutura ({grupo}):\n\n" + "".join(respostas)
     except Exception as e: return f"Erro de comunicação com o Zabbix: {str(e)}"
