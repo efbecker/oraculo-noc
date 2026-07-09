@@ -14,6 +14,8 @@ from app.services.zabbix import (
     gerar_grafico_zabbix,
     gerar_relatorio_consumo_todos
 )
+from app.services.anomalias import detectar_anomalias_zabbix
+from app.services.capacidade import prever_capacidade_zabbix
 
 # ==========================================
 # CONFIGURAÇÃO DO SISTEMA DE LOGS / AUDITORIA
@@ -112,6 +114,61 @@ def process_oraculo_message(message, username, token_zabbix, grupo_cliente, tts_
     if not zabbix_url: zabbix_url = get_user_zabbix_url(username)
     
     msg_l = message.lower()
+
+    # ======================================================================
+    # DETECÇÃO DE ANOMALIAS (z-score) — este bloco vem ANTES do bloco de
+    # relatório de propósito: "relatório de anomalias" contém 'relatorio' e,
+    # na ordem antiga, cairia no FinOps em vez de cair aqui.
+    # ======================================================================
+    if any(p in msg_l for p in ['anomal', 'anômal', 'fora do normal', 'comportamento estranho',
+                                 'algo estranho', 'estranho no ambiente', 'desvio de comportamento']):
+        dias = 7  # baseline padrão: 1 semana de trends horários
+        dias_match = re.search(r'(\d+)\s*dias?', msg_l)
+        if dias_match: dias = int(dias_match.group(1))
+        dias = max(2, min(dias, 30))
+
+        logger.info(f"[Anomalias] Usuário '{username}' solicitou detecção de anomalias (baseline {dias} dias).")
+        label = f"Detecção de Anomalias (baseline {dias} dias)"
+
+        def _gerar():
+            return detectar_anomalias_zabbix(dias, token_zabbix, grupo_cliente, zabbix_url)
+
+        job_id = start_report_job(username, label, _gerar, session_id=session_id)
+        if not job_id:
+            return {"reply": "⚠️ Não foi possível iniciar a análise. Tente novamente.", "audio_path": None, "is_html": 0}
+
+        intro = ("🔍 **Detecção de Anomalias iniciada!**\nEstou comparando o comportamento da última hora "
+                 f"de cada métrica contra o padrão dos últimos {dias} dias.\n\n"
+                 "*Assim que terminar, o resultado aparecerá automaticamente aqui no chat.*")
+        return {"reply": intro, "action": "scan", "target": label, "scan_id": job_id, "stage": REPORT_FIRST_STAGE, "is_html": 0}
+
+    # ======================================================================
+    # PREVISÃO DE CAPACIDADE (regressão linear de discos) — idem: antes do
+    # bloco de relatório para "relatório de capacidade" cair aqui.
+    # ======================================================================
+    if any(p in msg_l for p in ['capacidade', 'vai encher', 'quando enche', 'esgot',
+                                 'forecast', 'projeç', 'projec',
+                                 'previsão de disco', 'previsao de disco',
+                                 'tendência de disco', 'tendencia de disco']):
+        dias = 14  # histórico padrão da regressão: 2 semanas
+        dias_match = re.search(r'(\d+)\s*dias?', msg_l)
+        if dias_match: dias = int(dias_match.group(1))
+        dias = max(7, min(dias, 90))
+
+        logger.info(f"[Capacidade] Usuário '{username}' solicitou previsão de capacidade ({dias} dias de histórico).")
+        label = f"Previsão de Capacidade ({dias} dias de histórico)"
+
+        def _gerar():
+            return prever_capacidade_zabbix(dias, token_zabbix, grupo_cliente, zabbix_url)
+
+        job_id = start_report_job(username, label, _gerar, session_id=session_id)
+        if not job_id:
+            return {"reply": "⚠️ Não foi possível iniciar a análise. Tente novamente.", "audio_path": None, "is_html": 0}
+
+        intro = ("📈 **Previsão de Capacidade iniciada!**\nEstou projetando a tendência de crescimento "
+                 f"de discos, CPU, memória e interfaces de rede com base nos últimos {dias} dias.\n\n"
+                 "*Assim que terminar, o resultado aparecerá automaticamente aqui no chat.*")
+        return {"reply": intro, "action": "scan", "target": label, "scan_id": job_id, "stage": REPORT_FIRST_STAGE, "is_html": 0}
 
     if any(p in msg_l for p in ['grafico', 'gráfico', 'consumo', 'relatorio', 'relatório']):
         dias = 1.0

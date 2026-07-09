@@ -220,3 +220,8 @@
 09/07/2026 13:47:38 | INFO | [IA Oracle] Usuário 'schulze' iniciou interação livre com o modelo.
 09/07/2026 13:48:38 | INFO | [IA Oracle] Usuário 'schulze' iniciou interação livre com o modelo.
 09/07/2026 14:03:54 | INFO | [Relatório] Usuário 'schulze' solicitou relatório FinOps/Consumo para alvo: TODOS (30.0 dias).
+09/07/2026 14:19:46 | INFO | Serving on http://0.0.0.0:5000
+09/07/2026 15:09:55 | INFO | Serving on http://0.0.0.0:5000
+09/07/2026 15:10:29 | INFO | [Anomalias] Usuário 'schulze' solicitou detecção de anomalias (baseline 7 dias).
+09/07/2026 15:11:52 | INFO | [Anomalias] Usuário 'pollux' solicitou detecção de anomalias (baseline 7 dias).
+09/07/2026 15:13:58 | INFO | [Capacidade] Usuário 'pollux' solicitou previsão de capacidade (14 dias de histórico).

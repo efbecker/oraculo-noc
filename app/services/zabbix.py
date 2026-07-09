@@ -41,12 +41,26 @@ DISCOS_BLOQUEADOS_REGEX = re.compile(
 # oficial do Zabbix, ao contrário do nome do item (que varia muito por tradução).
 DISK_KEY_REGEX = re.compile(r'vfs\.fs\.(?:size|dependent)\[\s*([^,\]]+?)\s*(?:,\s*(pused|pfree|used|free|total))?\s*\]', re.IGNORECASE)
 
+# Chave de disco do template VMware (Monitoração simples): o mount é o 3º
+# parâmetro e o modo o 4º — ex.: vmware.vm.vfs.fs.size[{$VMWARE.URL},{$VMWARE.VM.UUID},C:\,pfree].
+# Sem este padrão, TODO ambiente VMware (vCenter/vSphere) ficava invisível
+# para a detecção por chave (o relatório FinOps só achava discos pelo
+# fallback de NOME, e a previsão de capacidade não achava nada).
+VMWARE_DISK_KEY_REGEX = re.compile(
+    r'vmware\.vm\.vfs\.fs\.size\[\s*[^,\]]*\s*,\s*[^,\]]*\s*,\s*([^,\]]+?)\s*(?:,\s*(pused|pfree|used|free|total|usage))?\s*\]',
+    re.IGNORECASE
+)
+
 def _parse_disk_key(key_):
     """Retorna (mount_point, kind) a partir da key_ do item, ou (None, None) se a
-    key não for reconhecida como item de espaço em disco do Zabbix."""
+    key não for reconhecida como item de espaço em disco do Zabbix.
+    Suporta o padrão clássico (vfs.fs.size/dependent) e o padrão VMware
+    (vmware.vm.vfs.fs.size) — este último testado PRIMEIRO, pois a chave
+    VMware contém 'vfs.fs.size' dentro dela e o regex genérico capturaria
+    a URL do vCenter como se fosse o mount."""
     if not key_:
         return None, None
-    m = DISK_KEY_REGEX.search(key_)
+    m = VMWARE_DISK_KEY_REGEX.search(key_) or DISK_KEY_REGEX.search(key_)
     if not m:
         return None, None
     # O template oficial "Windows by Zabbix agent" usa o mount ENTRE ASPAS na
@@ -981,3 +995,25 @@ def gerar_grafico_zabbix(nome_host: str, metrica: str, quantidade_dias: float, t
     que exista uma VM com nome parecido em outra conta.
     """
     return gerar_relatorio_consumo_todos(quantidade_dias, token, grupo, url, host_filter=nome_host)
+
+
+
+
+def _coletar_hosts_e_itens(token, grupo, url=None):
+    """Coleta hosts do grupo do usuário e seus itens numéricos ativos.
+    Helper COMPARTILHADO pelos módulos de análise (anomalias.py, capacidade.py).
+    Mesmo padrão de escopo do relatório FinOps: NUNCA sai do grupo do cliente."""
+    filtro = {}
+    if grupo and grupo != "GLOBAL":
+        g_res = zabbix_api("hostgroup.get", {"search": {"name": grupo}}, token, url)
+        if g_res: filtro["groupids"] = g_res[0].get('groupid')
+
+    hosts = zabbix_api("host.get", {"output": ["hostid", "name"], **filtro}, token, url)
+    items = []
+    for lote_hosts in _chunks([h['hostid'] for h in hosts], 20):
+        items.extend(zabbix_api("item.get", {
+            "hostids": lote_hosts,
+            "filter": {"status": "0", "value_type": ["0", "3"]},
+            "output": ["itemid", "hostid", "name", "value_type", "units", "key_", "lastvalue", "lastclock"]
+        }, token, url))
+    return hosts, items
