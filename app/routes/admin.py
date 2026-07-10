@@ -159,10 +159,6 @@ HTML_TEMPLATE = """
                         <input type="text" name="grupo_cliente" id="form-grupo" placeholder="VDC_POLLUX" required>
                     </div>
                     <div class="form-group">
-                        <label>Modelo de LLM (Oracle OCI)</label>
-                        <input type="text" name="ai_model" id="form-model" placeholder="cohere.command-r-08-2024" required>
-                    </div>
-                    <div class="form-group">
                         <label>Zabbix URL (Específica)</label>
                         <input type="url" name="zabbix_url" id="form-url" placeholder="https://.../api_jsonrpc.php">
                     </div>
@@ -187,13 +183,12 @@ HTML_TEMPLATE = """
                         <th>Usuário</th>
                         <th>Perfil</th>
                         <th>Grupo Zabbix</th>
-                        <th>Modelo LLM</th>
                         <th>Zabbix URL Endpoint</th>
                         <th style="width: 150px;">Ações</th>
                     </tr>
                 </thead>
                 <tbody id="users-tbody">
-                    <tr><td colspan="7" style="text-align:center; color:#666;">Carregando...</td></tr>
+                    <tr><td colspan="6" style="text-align:center; color:#666;">Carregando...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -393,7 +388,7 @@ HTML_TEMPLATE = """
                             </td>
                         </tr>
                         {% else %}
-                        <tr><td colspan="7" style="text-align:center; color:#666;">Nenhum backup executado ainda.</td></tr>
+                        <tr><td colspan="6" style="text-align:center; color:#666;">Nenhum backup executado ainda.</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>
@@ -454,15 +449,15 @@ HTML_TEMPLATE = """
             usersPaginaAtual = pagina;
             const q = document.getElementById('users-search').value.trim();
             const tbody = document.getElementById('users-tbody');
-            tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color:#666;">Carregando...</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#666;">Carregando...</td></tr>';
             try {
                 const r = await fetch(`/admin/users/list?page=${pagina}&q=${encodeURIComponent(q)}`);
                 const data = await r.json();
-                if (!data.ok) { tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color:#ff6b6b;">Erro ao carregar usuários.</td></tr>'; return; }
+                if (!data.ok) { tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#ff6b6b;">Erro ao carregar usuários.</td></tr>'; return; }
 
                 usersTotalPaginas = data.total_pages;
                 if (!data.users.length) {
-                    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color:#666;">Nenhum usuário encontrado.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#666;">Nenhum usuário encontrado.</td></tr>';
                 } else {
                     tbody.innerHTML = data.users.map(u => `
                         <tr>
@@ -470,10 +465,9 @@ HTML_TEMPLATE = """
                             <td><strong>${escapeHtml(u.username)}</strong></td>
                             <td>${escapeHtml(u.profile)}</td>
                             <td><span style="color:#ff9e00; font-family: monospace;">${escapeHtml(u.grupo_cliente)}</span></td>
-                            <td><span style="color:#00e5ff; font-family: monospace; font-size: 13px;">${escapeHtml(u.ai_model)}</span></td>
                             <td><span style="color:#00e676; font-size: 12px;">${u.zabbix_url ? escapeHtml(u.zabbix_url) : '🌍 Padrão Global (config.py)'}</span></td>
                             <td class="actions-cell">
-                                <button type="button" class="btn-edit" onclick='editarUsuario(${JSON.stringify(u.username)}, ${JSON.stringify(u.profile)}, ${JSON.stringify(u.grupo_cliente)}, ${JSON.stringify(u.ai_model)}, ${JSON.stringify(u.zabbix_url || "")}, ${JSON.stringify(u.token_zabbix || "")})'>Editar</button>
+                                <button type="button" class="btn-edit" onclick='editarUsuario(${JSON.stringify(u.username)}, ${JSON.stringify(u.profile)}, ${JSON.stringify(u.grupo_cliente)}, ${JSON.stringify(u.zabbix_url || "")}, ${JSON.stringify(u.token_zabbix || "")})'>Editar</button>
                                 <form method="POST" action="/admin/delete" style="margin: 0;" onsubmit="return confirm('Deseja excluir este usuário?');">
                                     <input type="hidden" name="id" value="${u.id}">
                                     <button type="submit" class="btn-danger">Excluir</button>
@@ -487,7 +481,7 @@ HTML_TEMPLATE = """
                 document.getElementById('users-prev').disabled = data.page <= 1;
                 document.getElementById('users-next').disabled = data.page >= data.total_pages;
             } catch (e) {
-                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color:#ff6b6b;">Erro de comunicação.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#ff6b6b;">Erro de comunicação.</td></tr>';
             }
         }
         function mudarPaginaUsuarios(delta) {
@@ -500,13 +494,12 @@ HTML_TEMPLATE = """
             usersBuscaTimer = setTimeout(() => carregarUsuarios(1), 350);  // debounce
         });
 
-        function editarUsuario(username, profile, grupo, model, url, token) {
+        function editarUsuario(username, profile, grupo, url, token) {
             document.getElementById('form-title').innerHTML = "📝 Editando Conta: <strong style='color:#00e5ff;'>" + username + "</strong>";
             document.getElementById('form-username').value = username;
             document.getElementById('form-username').readOnly = true;
             document.getElementById('form-profile').value = profile;
             document.getElementById('form-grupo').value = grupo;
-            document.getElementById('form-model').value = model || 'cohere.command-r-08-2024';
             document.getElementById('form-url').value = url;
             document.getElementById('form-token').value = token;
             document.getElementById('form-password').placeholder = "Deixe em branco p/ não alterar";
@@ -822,7 +815,7 @@ def users_list():
     offset = (page - 1) * per_page
 
     rows = db.query_all(
-        f"SELECT id, username, profile, grupo_cliente, ai_model, zabbix_url, token_zabbix "
+        f"SELECT id, username, profile, grupo_cliente, zabbix_url, token_zabbix "
         f"FROM users {where} ORDER BY username ASC LIMIT ? OFFSET ?",
         tuple(params) + (per_page, offset)
     )
@@ -843,13 +836,15 @@ def save_user():
     grupo_cliente = request.form.get('grupo_cliente').strip()
     token_zabbix = request.form.get('token_zabbix').strip()
     zabbix_url = request.form.get('zabbix_url').strip()
-    ai_model = request.form.get('ai_model').strip()
     
     user = db.query_one("SELECT id FROM users WHERE username=?", (username,))
     
     if user:
-        query = "UPDATE users SET profile=?, grupo_cliente=?, zabbix_url=?, ai_model=?"
-        params = [profile, grupo_cliente, zabbix_url, ai_model]
+        # ai_model saiu do formulário (o provedor/modelo agora é global, em
+        # Admin > Inteligência Artificial) — o UPDATE preserva o valor antigo
+        # da coluna, que segue como fallback legado para OCI.
+        query = "UPDATE users SET profile=?, grupo_cliente=?, zabbix_url=?"
+        params = [profile, grupo_cliente, zabbix_url]
         if password and password.strip() != "":
             query += ", password=?"
             params.append(generate_password_hash(password))  # nunca grava texto puro
@@ -868,7 +863,7 @@ def save_user():
             senha_hash = generate_password_hash(secrets.token_urlsafe(24))
         db.execute(
             "INSERT INTO users (username, password, profile, grupo_cliente, token_zabbix, zabbix_url, ai_model) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (username, senha_hash, profile, grupo_cliente, token_zabbix, zabbix_url, ai_model)
+            (username, senha_hash, profile, grupo_cliente, token_zabbix, zabbix_url, 'cohere.command-r-08-2024')
         )
     return redirect(request.referrer or url_for('admin.index'))
 
