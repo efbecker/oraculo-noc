@@ -25,54 +25,115 @@ from app.services.zabbix import (
 # vem do Zabbix), para evitar falso positivo em métricas quase constantes —
 # ex.: um link ocioso que oscila entre 2 e 5 Kbps tem desvio minúsculo, e sem
 # o piso QUALQUER variação normal viraria "anomalia de 20 sigmas".
+# Para métricas de unidade grande (Hz, bytes), o piso relativo de 5% da média
+# (aplicado no cálculo) é quem domina — o piso absoluto aqui é só a rede de
+# segurança para métricas em escala pequena.
 # >> CALIBRAGEM: se aparecerem falsos positivos no dia a dia (ex.: backups
 # noturnos legítimos), aumente o piso da categoria ou o LIMIAR_ATENCAO.
-_ANOM_FLOORS = {'cpu': 1.0, 'mem': 1.0, 'disk': 0.5, 'net': 250_000.0, 'vpn': 1.0}
-_ANOM_LABELS = {'cpu': 'CPU', 'mem': 'Memória', 'disk': 'Disco', 'net': 'Rede', 'vpn': 'VPN'}
+_ANOM_FLOORS = {'cpu': 1.0, 'mem': 1.0, 'disk': 0.5, 'net': 250_000.0, 'io': 500_000.0, 'vpn': 1.0}
+_ANOM_LABELS = {'cpu': 'CPU', 'mem': 'Memória', 'disk': 'Disco', 'net': 'Rede', 'io': 'Disco I/O', 'vpn': 'VPN'}
 
 LIMIAR_ATENCAO = 3.0   # desvios (σ) para marcar ATENÇÃO
 LIMIAR_CRITICO = 5.0   # desvios (σ) para marcar CRÍTICO
 MIN_PONTOS_BASELINE = 24  # exige ao menos ~1 dia de trends para confiar no baseline
 
+# Nomes de item que indicam I/O de DISCO (leitura/escrita), e não tráfego de
+# rede — sem isso, "Média de bytes escritos do disco" era rotulado [Rede].
+_IO_DISCO_REGEX = re.compile(r'\b(disco|disk|iops|leitura|escrita|lidos?|escritos?|gravad\w*|read|write|written)\b', re.IGNORECASE)
+
 
 def _classificar_item_anomalia(it):
     """Retorna a categoria do item para análise de anomalia, ou None se o item
-    não for de uma das métricas monitoradas. Reaproveita as mesmas heurísticas
-    de nome/chave já validadas no relatório FinOps."""
+    não for de uma das métricas monitoradas.
+
+    A classificação tenta primeiro pela CHAVE técnica (robusta, igual em
+    qualquer idioma de template) e só depois pelas heurísticas de nome.
+    Itens VMware fixados por pedido do cliente: 'Uso de CPU em MHz'
+    (vmware.vm.cpu.usage) e 'Uso de memória da VM'
+    (vmware.vm.memory.size.usage.guest) SEMPRE entram na análise."""
     nl = it['name'].lower()
+    kl = (it.get('key_') or '').lower()
+
+    # --- por CHAVE técnica (prioridade) ---
+    if 'vmware.vm.cpu.usage' in kl:          # cobre .usage (Hz/MHz) e .usage.perf (%)
+        return 'cpu'
+    if 'vmware.vm.memory.usage' in kl or 'vmware.vm.memory.size.usage' in kl:
+        return 'mem'
     mount, kind = _parse_disk_key(it.get('key_', ''))
     if mount and kind in ('pused', 'pfree'):
         return 'disk'
-    if 'cpu' in nl and re.search(r'\b(uso|usage|util|percent)\b', nl):
+
+    # --- por NOME (heurísticas já validadas no relatório FinOps) ---
+    if 'cpu' in nl and re.search(r'\b(uso|usage|util|percent|mhz|ghz)\b', nl):
         return 'cpu'
     if re.search(r'\b(mem|memória|memory)\b', nl) and re.search(r'\b(uso|usage|util|percent)\b', nl):
         return 'mem'
     if re.search(r'\b(ssl|vpn|ipsec|tunnel|túnel)\b', nl) and re.search(r'\b(user|usuário|active|ativos)\b', nl):
         return 'vpn'
-    if (not re.search(r'\b(loopback|lo|veth|docker|speed|velocidade|drop|error|discard|status|estado)\b', nl)
-            and re.search(r'\b(bits?|bytes?|traffic|tráfego|trafego|bps|octets?)\b', nl)):
-        return 'net'
+    if re.search(r'\b(bits?|bytes?|traffic|tráfego|trafego|bps|octets?|iops)\b', nl):
+        # bytes/bits DE DISCO = I/O; caso contrário, tráfego de rede
+        if _IO_DISCO_REGEX.search(nl):
+            return 'io'
+        if not re.search(r'\b(loopback|lo|veth|docker|speed|velocidade|drop|error|discard|status|estado)\b', nl):
+            return 'net'
     return None
 
 
+def _fmt_hz(v):
+    """Formata frequência (valor em Hz)."""
+    if v >= 1e9: return f"{v/1e9:.2f} GHz"
+    if v >= 1e6: return f"{v/1e6:.0f} MHz"
+    if v >= 1e3: return f"{v/1e3:.0f} KHz"
+    return f"{v:.0f} Hz"
+
+
+def _fmt_bytes(v, sufixo=''):
+    """Formata tamanho (valor em bytes). sufixo='/s' para taxas de I/O."""
+    for lim, unid in ((1024**4, 'TB'), (1024**3, 'GB'), (1024**2, 'MB'), (1024, 'KB')):
+        if v >= lim: return f"{v/lim:.1f} {unid}{sufixo}"
+    return f"{v:.0f} B{sufixo}"
+
+
 def _fmt_metrica(valor, categoria, units=''):
-    """Formata um valor cru na unidade humana da categoria (só para EXIBIÇÃO;
-    toda a matemática de z-score acontece nos valores crus)."""
-    if categoria in ('cpu', 'mem', 'disk'):
+    """Formata um valor cru na unidade humana REAL do item (só para EXIBIÇÃO;
+    toda a matemática de z-score acontece nos valores crus). A regra de ouro:
+    a unidade do Zabbix manda — '%' só aparece se o item FOR percentual.
+    Antes, todo item de CPU/memória era exibido como '%', o que gerava
+    aberrações tipo '45200000.0%' para 'Uso de CPU em MHz' (valor em Hz)."""
+    u = (units or '').strip()
+    ul = u.lower()
+
+    if '%' in u:
         return f"{valor:.1f}%"
     if categoria == 'vpn':
         return f"{int(round(valor))} usuários"
+    if categoria == 'io':
+        # I/O de disco: convenção de mercado é BYTES por segundo (MB/s).
+        # ATENÇÃO case-sensitive: 'bps' (minúsculo) = bits/s → converte;
+        # 'Bps'/'B'/bytes = já está em bytes/s → usa direto.
+        if u == 'bps':
+            return _fmt_bytes(valor / 8, '/s')
+        return _fmt_bytes(valor, '/s')
     if categoria == 'net':
-        # 'Bps'/bytes = bytes/s (converte p/ bits); 'bps' minúsculo = bits/s.
-        # A distinção é case-sensitive, então usa a unidade ORIGINAL aqui.
-        u_orig = (units or '').strip()
-        eh_bytes = u_orig == 'Bps' or 'byte' in u_orig.lower() or u_orig == 'B'
+        # Rede: convenção é BITS por segundo (Mbps). 'Bps'/bytes converte p/ bits.
+        eh_bytes = u == 'Bps' or u == 'B' or 'byte' in ul
         bits = valor * 8 if eh_bytes else valor
         mbps = bits / 1e6
         if mbps >= 1000: return f"{mbps/1000:.2f} Gbps"
         if mbps >= 1:    return f"{mbps:.1f} Mbps"
         return f"{bits/1e3:.0f} Kbps"
-    return f"{valor:.2f} {units}".strip()
+    if categoria == 'cpu':
+        if ul == 'hz' or not u:      # vmware.vm.cpu.usage devolve Hz
+            return _fmt_hz(valor)
+        if ul == 'mhz':
+            return _fmt_hz(valor * 1e6)
+        if ul == 'ghz':
+            return _fmt_hz(valor * 1e9)
+    if categoria == 'mem' and (u == 'B' or 'byte' in ul or not u):
+        return _fmt_bytes(valor)     # vmware.vm.memory.size.usage.guest devolve bytes
+    if categoria == 'disk':
+        return f"{valor:.1f}%"
+    return f"{valor:.2f} {u}".strip()
 
 
 def detectar_anomalias_zabbix(dias_baseline: float, token: str, grupo: str, url: str = None) -> str:
@@ -185,10 +246,16 @@ def detectar_anomalias_zabbix(dias_baseline: float, token: str, grupo: str, url:
                   "<th style='padding:10px; text-align:left; color:#00e5ff; font-size:11px;'>DESVIO</th>"
                   "</tr></thead><tbody>" + "".join(linhas) + "</tbody></table>")
 
-        rodape = (f"<div style='color:#666; font-size:12px; margin-top:10px;'>+ {ocultas} anomalia(s) de menor desvio omitida(s).</div>"
-                  if ocultas else "")
+        rodape_partes = []
+        if ocultas:
+            rodape_partes.append(f"+ {ocultas} anomalia(s) de menor desvio omitida(s).")
+        rodape_partes.append("<strong>σ (sigma)</strong> = desvio padrão: mede o quão longe o valor atual está "
+                             "da média histórica. Até 2σ é variação normal; 3σ é raro (~0,3% do tempo); "
+                             "5σ+ é praticamente impossível de acontecer por acaso — algo mudou de verdade no ambiente.")
+        rodape = f"<div style='color:#666; font-size:12px; margin-top:10px;'>{' '.join(rodape_partes)}</div>"
 
         return cabecalho + resumo + tabela + rodape + "</div>"
 
     except Exception as e:
         return f"Erro na detecção de anomalias: {str(e)}"
+

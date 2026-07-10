@@ -163,6 +163,9 @@ def _consulta_historico_adaptativa(method, params_base, itemids, time_from, time
                 {**params_base, "itemids": lote, "time_from": tf, "time_till": tt},
                 token, url
             ))
+            # Respiro entre lotes: cede o GIL para as threads da interface web
+            # (chat/logs/progresso) responderem, e alivia o servidor do Zabbix.
+            time.sleep(0.05)
         except ZabbixConsultaPesadaError:
             time.sleep(0.5)  # dá um respiro pro servidor antes de re-tentar
             if len(lote) > LOTE_MINIMO:
@@ -863,6 +866,12 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
             buf.seek(0)
             img_b64 = base64.b64encode(buf.read()).decode('utf-8') if total_rows > 0 else ""
             plt.close(fig)
+            # Respiro entre hosts: renderizar um gráfico matplotlib segura o GIL
+            # por até alguns segundos. Em ambiente grande (100+ hosts), a sequência
+            # sem pausa sufocava as threads do waitress e a aplicação inteira
+            # parava de responder (Cloudflare 522). O sleep cede a vez às
+            # requisições curtas da interface. NÃO altera o layout do relatório.
+            time.sleep(0.05)
 
             vpn_html = f"<br>VPN Ativa: <strong style='color:#00e676'>{vpn_str}</strong>" if vpn_str != "N/A" else ""
 

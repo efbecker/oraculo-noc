@@ -225,3 +225,30 @@
 09/07/2026 15:10:29 | INFO | [Anomalias] Usuário 'schulze' solicitou detecção de anomalias (baseline 7 dias).
 09/07/2026 15:11:52 | INFO | [Anomalias] Usuário 'pollux' solicitou detecção de anomalias (baseline 7 dias).
 09/07/2026 15:13:58 | INFO | [Capacidade] Usuário 'pollux' solicitou previsão de capacidade (14 dias de histórico).
+09/07/2026 15:37:40 | WARNING | Task queue depth is 1
+09/07/2026 15:37:40 | WARNING | Task queue depth is 2
+09/07/2026 15:37:40 | WARNING | Task queue depth is 3
+09/07/2026 15:37:41 | WARNING | Task queue depth is 1
+09/07/2026 15:37:41 | WARNING | Task queue depth is 1
+09/07/2026 15:37:41 | WARNING | Task queue depth is 1
+09/07/2026 15:37:41 | INFO | [Anomalias] Usuário 'pollux' solicitou detecção de anomalias (baseline 7 dias).
+09/07/2026 15:38:41 | INFO | [Anomalias] Usuário 'schulze' solicitou detecção de anomalias (baseline 7 dias).
+09/07/2026 16:00:15 | INFO | Serving on http://0.0.0.0:5000
+09/07/2026 16:00:32 | INFO | [Anomalias] Usuário 'schulze' solicitou detecção de anomalias (baseline 7 dias).
+09/07/2026 16:04:48 | INFO | [Anomalias] Usuário 'armazem' solicitou detecção de anomalias (baseline 7 dias).
+09/07/2026 16:05:11 | INFO | [IA Oracle] Usuário 'pollux' iniciou interação livre com o modelo.
+09/07/2026 17:51:17 | INFO | Serving on http://0.0.0.0:5000
+09/07/2026 17:51:28 | INFO | Serving on http://0.0.0.0:5000
+09/07/2026 17:52:12 | INFO | [Relatório] Usuário 'schulze' solicitou relatório FinOps/Consumo para alvo: TODOS (1.0 dias).
+09/07/2026 17:53:16 | INFO | [IA Oracle] Usuário 'pollux' iniciou interação livre com o modelo.
+09/07/2026 17:53:31 | INFO | [Relatório] Usuário 'pollux' solicitou relatório FinOps/Consumo para alvo: TODOS (1.0 dias).
+09/07/2026 18:19:00 | INFO | Serving on http://0.0.0.0:5000
+09/07/2026 18:19:40 | INFO | [Anomalias] Usuário 'schulze' solicitou detecção de anomalias (baseline 7 dias).
+09/07/2026 18:27:39 | INFO | [IA Oracle] Usuário 'schulze' iniciou interação livre com o modelo.
+09/07/2026 18:31:42 | INFO | [Anomalias] Usuário 'cpb' solicitou detecção de anomalias (baseline 7 dias).
+09/07/2026 18:34:57 | INFO | [Anomalias] Usuário 'armazem' solicitou detecção de anomalias (baseline 7 dias).
+09/07/2026 19:18:07 | INFO | Serving on http://0.0.0.0:5000
+10/07/2026 02:00:24 | INFO | [Backup] Disparando backup agendado...
+10/07/2026 08:54:59 | INFO | Serving on http://0.0.0.0:5000
+10/07/2026 08:58:22 | INFO | Serving on http://0.0.0.0:5000
+10/07/2026 09:01:56 | INFO | Serving on http://0.0.0.0:5000

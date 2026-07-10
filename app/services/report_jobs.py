@@ -32,6 +32,12 @@ _STAGES = [
 _CEILING = 92.0
 FIRST_STAGE = _STAGES[0][1]
 
+# Serializa relatórios pesados: em ambiente grande (100+ hosts), DOIS relatórios
+# rodando ao mesmo tempo dobram o consumo de CPU/RAM e disputam o GIL — receita
+# para o processo travar ou ser morto por falta de memória. Com o semáforo,
+# o segundo job entra em FILA e o widget avisa o usuário.
+_FILA_JOBS_PESADOS = threading.Semaphore(1)
+
 
 def _remover_barra_duplicada(html):
     """Remove a barra de progresso 'falsa' que o relatório FinOps embute na mensagem
@@ -71,41 +77,51 @@ def start_report_job(username, label, generator_fn, session_id=None):
         return None
 
     def run():
-        inicio = time.time()
-        stop = threading.Event()
+        # Entra na fila de jobs pesados (1 por vez). Se outro relatório estiver
+        # rodando, informa no widget e aguarda a vez — melhor esperar 1 minuto
+        # na fila do que derrubar a aplicação inteira.
+        if not _FILA_JOBS_PESADOS.acquire(blocking=False):
+            update_scan_progress(job_id, 2.0, "Na fila: aguardando outro relatório terminar...")
+            _FILA_JOBS_PESADOS.acquire()
 
-        def heartbeat():
-            # Progresso baseado em TEMPO: enche suave de ~3% até o teto (92%) ao
-            # longo de MIN_VISIBLE_SECONDS e depois segura no teto até a geração
-            # terminar. Assim a barra sempre aparece progredindo, igual ao scan.
-            while not stop.wait(0.6):
-                frac = min(1.0, (time.time() - inicio) / MIN_VISIBLE_SECONDS)
-                p = 3.0 + frac * (_CEILING - 3.0)
-                stage = FIRST_STAGE
-                for limiar, texto in _STAGES:
-                    if p >= limiar:
-                        stage = texto
-                update_scan_progress(job_id, round(p, 1), stage)
-
-        hb = threading.Thread(target=heartbeat, daemon=True)
-        hb.start()
-
-        reply_content = ""
-        final_status = "finished"
         try:
-            reply_content = _remover_barra_duplicada(generator_fn() or "Relatório vazio.")
-        except Exception as e:
-            logger.error(f"[Report] Erro ao gerar relatório para '{username}': {e}")
-            reply_content = f"⚠️ **Erro ao gerar o relatório.**\n`{e}`"
-            final_status = "error"
+            inicio = time.time()
+            stop = threading.Event()
+
+            def heartbeat():
+                # Progresso baseado em TEMPO: enche suave de ~3% até o teto (92%) ao
+                # longo de MIN_VISIBLE_SECONDS e depois segura no teto até a geração
+                # terminar. Assim a barra sempre aparece progredindo, igual ao scan.
+                while not stop.wait(0.6):
+                    frac = min(1.0, (time.time() - inicio) / MIN_VISIBLE_SECONDS)
+                    p = 3.0 + frac * (_CEILING - 3.0)
+                    stage = FIRST_STAGE
+                    for limiar, texto in _STAGES:
+                        if p >= limiar:
+                            stage = texto
+                    update_scan_progress(job_id, round(p, 1), stage)
+
+            hb = threading.Thread(target=heartbeat, daemon=True)
+            hb.start()
+
+            reply_content = ""
+            final_status = "finished"
+            try:
+                reply_content = _remover_barra_duplicada(generator_fn() or "Relatório vazio.")
+            except Exception as e:
+                logger.error(f"[Report] Erro ao gerar relatório para '{username}': {e}")
+                reply_content = f"⚠️ **Erro ao gerar o relatório.**\n`{e}`"
+                final_status = "error"
+            finally:
+                # Segura a barra visível/progredindo por um tempo mínimo mesmo quando a
+                # geração foi muito rápida, para o usuário efetivamente ver o progresso.
+                restante = MIN_VISIBLE_SECONDS - (time.time() - inicio)
+                if restante > 0:
+                    time.sleep(restante)
+                stop.set()
+                hb.join(timeout=4)
         finally:
-            # Segura a barra visível/progredindo por um tempo mínimo mesmo quando a
-            # geração foi muito rápida, para o usuário efetivamente ver o progresso.
-            restante = MIN_VISIBLE_SECONDS - (time.time() - inicio)
-            if restante > 0:
-                time.sleep(restante)
-            stop.set()
-            hb.join(timeout=4)
+            _FILA_JOBS_PESADOS.release()
 
         # Entrega no chat (mesma ordem do scan: grava a mensagem ANTES de marcar
         # o job como concluído, para evitar corrida na hora do frontend recarregar).

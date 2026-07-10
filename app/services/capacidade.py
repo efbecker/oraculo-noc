@@ -109,6 +109,7 @@ def prever_capacidade_zabbix(dias_historico: float, token: str, grupo: str, url:
 
         for it in items:
             nl = it['name'].lower()
+            kl = (it.get('key_') or '').lower()
             units = (it.get('units') or '').strip()
 
             mount, kind = _parse_disk_key(it.get('key_', ''))
@@ -120,12 +121,20 @@ def prever_capacidade_zabbix(dias_historico: float, token: str, grupo: str, url:
                     alvos_disco[chave] = it
                 continue
 
-            # CPU e memória: só em %, senão a projeção para 90% não faz sentido
-            if '%' in units and 'cpu' in nl and re.search(r'\b(uso|usage|util|percent)\b', nl):
+            # CPU e memória: só em %, senão a projeção para 90% não faz sentido.
+            # Chaves VMware percentuais entram por CHAVE (robusto a idioma do
+            # template); os demais entram por nome+unidade.
+            eh_cpu_pct = 'vmware.vm.cpu.usage.perf' in kl or (
+                '%' in units and 'cpu' in nl and re.search(r'\b(uso|usage|util|percent)\b', nl))
+            eh_mem_pct = ('vmware.vm.memory.usage[' in kl or kl.startswith('vmware.vm.memory.usage')) or (
+                '%' in units and re.search(r'\b(mem|memória|memory)\b', nl) and re.search(r'\b(uso|usage|util|percent)\b', nl))
+
+            if eh_cpu_pct and 'mhz' not in nl and 'ghz' not in nl:
                 alvos_cpu.append(it)
-            elif '%' in units and re.search(r'\b(mem|memória|memory)\b', nl) and re.search(r'\b(uso|usage|util|percent)\b', nl):
+            elif eh_mem_pct:
                 alvos_mem.append(it)
             elif (not re.search(r'\b(loopback|lo|veth|docker|speed|velocidade|drop|error|discard|status|estado)\b', nl)
+                    and not re.search(r'\b(disco|disk|iops|leitura|escrita|lidos?|escritos?|gravad\w*|read|write|written)\b', nl)
                     and re.search(r'\b(bits?|bytes?|traffic|tráfego|trafego|bps|octets?)\b', nl)):
                 alvos_net.append(it)
 
@@ -324,3 +333,4 @@ def prever_capacidade_zabbix(dias_historico: float, token: str, grupo: str, url:
 
     except Exception as e:
         return f"Erro na previsão de capacidade: {str(e)}"
+
