@@ -3,7 +3,7 @@ import secrets
 from werkzeug.security import generate_password_hash
 from flask import Blueprint, request, redirect, url_for, session, render_template_string, jsonify, send_file
 from app import db
-from app.services import backup_manager, branding
+from app.services import backup_manager, branding, ai_providers
 
 bp = Blueprint('admin', __name__)
 
@@ -120,6 +120,7 @@ HTML_TEMPLATE = """
             <nav class="sidebar-nav">
                 <a href="#usuarios" class="nav-item" data-tab="usuarios">👤 Usuários</a>
                 <a href="#banco" class="nav-item" data-tab="banco">🗄️ Banco de Dados</a>
+                <a href="#ia" class="nav-item" data-tab="ia">🧠 Inteligência Artificial</a>
                 <a href="#branding" class="nav-item" data-tab="branding">🖼️ Branding</a>
                 <a href="#backup" class="nav-item" data-tab="backup">💾 Backup</a>
                 <a href="#logs" class="nav-item" data-tab="logs">📜 Logs</a>
@@ -245,6 +246,47 @@ HTML_TEMPLATE = """
                 <button type="button" class="btn-submit" onclick="aplicarConfigDb()">💾 Salvar e Aplicar</button>
             </div>
             <div id="db-status-msg" class="status-msg"></div>
+        </div>
+        </section>
+
+        <section id="tab-ia" class="admin-tab">
+        <h2 class="content-title">🧠 Inteligência Artificial</h2>
+        <div class="form-container">
+            <p style="font-size:13px; color:#aaa; margin-top:-10px;">
+                Atual: <span style="background:#00e5ff22; color:#00e5ff; padding:2px 8px; border-radius:8px; font-weight:bold;">{{ ia_labels.get(ia_cfg.provider, ia_cfg.provider) }}</span>
+                {% if ia_cfg.model %}— modelo <code>{{ ia_cfg.model }}</code>{% endif %}
+            </p>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>Provedor</label>
+                    <select id="ia-provider" onchange="toggleIaFields()">
+                        <option value="oci" {{ 'selected' if ia_cfg.provider == 'oci' else '' }}>Oracle OCI GenAI (Cohere)</option>
+                        <option value="openai" {{ 'selected' if ia_cfg.provider == 'openai' else '' }}>OpenAI (GPT)</option>
+                        <option value="gemini" {{ 'selected' if ia_cfg.provider == 'gemini' else '' }}>Google Gemini</option>
+                        <option value="anthropic" {{ 'selected' if ia_cfg.provider == 'anthropic' else '' }}>Anthropic (Claude)</option>
+                        <option value="openai_compat" {{ 'selected' if ia_cfg.provider == 'openai_compat' else '' }}>OpenAI-compatível (Groq, DeepSeek, Ollama...)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Modelo <span style="color:#667;">(em branco = padrão do provedor)</span></label>
+                    <input type="text" id="ia-model" list="ia-model-sugestoes" placeholder="ex.: gpt-4o-mini" value="{{ ia_cfg.model }}">
+                    <datalist id="ia-model-sugestoes"></datalist>
+                </div>
+                <div class="form-group ia-key-field">
+                    <label>API Key</label>
+                    <input type="password" id="ia-api-key" placeholder="{{ 'Já salva — deixe em branco p/ manter (' + ia_cfg.api_key + ')' if ia_cfg.api_key else 'Cole a chave do provedor' }}">
+                </div>
+                <div class="form-group ia-baseurl-field">
+                    <label>Base URL</label>
+                    <input type="text" id="ia-base-url" placeholder="ex.: http://10.0.0.50:11434/v1 (Ollama)" value="{{ ia_cfg.base_url }}">
+                </div>
+            </div>
+            <p class="field-hint" id="ia-hint"></p>
+            <div class="row-inline">
+                <button type="button" class="btn-secondary" onclick="testarIa()">🔌 Testar Conexão</button>
+                <button type="button" class="btn-submit" onclick="aplicarIa()">💾 Salvar e Aplicar</button>
+            </div>
+            <div id="ia-status-msg" class="status-msg"></div>
         </div>
         </section>
 
@@ -512,6 +554,57 @@ HTML_TEMPLATE = """
             } catch (e) { mostrarStatus('db-status-msg', false, 'Erro de comunicação: ' + e); }
         }
 
+        // ---------- Inteligência Artificial ----------
+        const IA_SUGESTOES = {
+            oci: ['cohere.command-r-08-2024', 'cohere.command-r-plus-08-2024'],
+            openai: ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini'],
+            gemini: ['gemini-2.0-flash', 'gemini-2.5-flash', 'gemini-2.5-pro'],
+            anthropic: ['claude-sonnet-4-5', 'claude-haiku-4-5'],
+            openai_compat: ['llama3.1', 'deepseek-chat', 'mistral-large-latest']
+        };
+        const IA_DICAS = {
+            oci: 'A OCI autentica pelo arquivo ~/.oci/config do servidor (API key) ou por Instance Principals (VM na OCI) — o campo API Key não é usado.',
+            openai: 'Crie a chave em platform.openai.com → API keys. Deixe a Base URL em branco.',
+            gemini: 'Crie a chave gratuita em aistudio.google.com → Get API key.',
+            anthropic: 'Crie a chave em console.anthropic.com → API keys.',
+            openai_compat: 'Para Ollama local: Base URL http://IP:11434/v1, sem chave. Groq: https://api.groq.com/openai/v1 + chave. DeepSeek: https://api.deepseek.com + chave.'
+        };
+        function toggleIaFields() {
+            const p = document.getElementById('ia-provider').value;
+            document.querySelector('.ia-key-field').style.display = (p === 'oci') ? 'none' : '';
+            document.querySelector('.ia-baseurl-field').style.display = (p === 'openai_compat') ? '' : 'none';
+            document.getElementById('ia-hint').innerText = IA_DICAS[p] || '';
+            const dl = document.getElementById('ia-model-sugestoes');
+            dl.innerHTML = (IA_SUGESTOES[p] || []).map(m => `<option value="${m}">`).join('');
+        }
+        function coletarIaForm() {
+            return {
+                provider: document.getElementById('ia-provider').value,
+                model: document.getElementById('ia-model').value.trim(),
+                api_key: document.getElementById('ia-api-key').value.trim(),   // em branco = manter a salva
+                base_url: document.getElementById('ia-base-url').value.trim()
+            };
+        }
+        async function testarIa() {
+            mostrarStatus('ia-status-msg', true, '🔄 Enviando uma pergunta de teste ao provedor...');
+            try {
+                const r = await fetch('/admin/ai/test', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(coletarIaForm()) });
+                const data = await r.json();
+                mostrarStatus('ia-status-msg', data.ok, data.message);
+            } catch (e) { mostrarStatus('ia-status-msg', false, 'Erro de comunicação: ' + e); }
+        }
+        async function aplicarIa() {
+            if (!confirm('Isso troca a IA em uso AGORA MESMO para todos os usuários do chat. Continuar?')) return;
+            mostrarStatus('ia-status-msg', true, '🔄 Testando e aplicando...');
+            try {
+                const r = await fetch('/admin/ai/apply', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(coletarIaForm()) });
+                const data = await r.json();
+                mostrarStatus('ia-status-msg', data.ok, data.message);
+                if (data.ok) setTimeout(() => window.location.reload(), 1500);
+            } catch (e) { mostrarStatus('ia-status-msg', false, 'Erro de comunicação: ' + e); }
+        }
+        toggleIaFields();
+
         // ---------- Backup ----------
         function toggleWeekdayField() {
             document.getElementById('bk-weekday-field').style.display = document.getElementById('bk-frequency').value === 'weekly' ? '' : 'none';
@@ -697,6 +790,8 @@ def index():
     return render_template_string(
         HTML_TEMPLATE,
         db_cfg=db.current_config(),
+        ia_cfg=ai_providers.current_config(),   # chave já vem MASCARADA daqui
+        ia_labels=ai_providers.PROVIDER_LABELS,
         backup_cfg=backup_manager.load_config(),
         backups=backup_manager.historico(),
         logo=branding.logo_info(),
@@ -844,6 +939,56 @@ def db_apply():
         return jsonify({"ok": True, "message": "✅ Configuração aplicada e tabelas verificadas/criadas com sucesso."})
     except Exception as e:
         return jsonify({"ok": False, "message": f"Erro ao aplicar/criar tabelas: {e}"})
+
+
+@bp.route('/admin/ai/test', methods=['POST'])
+def ai_test():
+    guard = _admin_only_json()
+    if guard: return guard
+    data = request.json or {}
+
+    # Chave em branco = "usar a chave já salva" (mesma regra da senha do banco:
+    # o campo nunca é preenchido de volta por segurança, então testar sem
+    # digitar de novo deve usar a atual em vez de mandar chave vazia).
+    api_key = (data.get('api_key') or '').strip()
+    if not api_key:
+        api_key = ai_providers.current_config(mask_key=False).get('api_key') or ''
+
+    ok, msg = ai_providers.test_connection(
+        data.get('provider'), model=data.get('model'),
+        api_key=api_key, base_url=data.get('base_url')
+    )
+    return jsonify({"ok": ok, "message": msg})
+
+
+@bp.route('/admin/ai/apply', methods=['POST'])
+def ai_apply():
+    guard = _admin_only_json()
+    if guard: return guard
+    data = request.json or {}
+
+    api_key = (data.get('api_key') or '').strip()
+    if not api_key:
+        api_key = ai_providers.current_config(mask_key=False).get('api_key') or ''
+
+    # Testa ANTES de aplicar: uma IA mal configurada quebraria o chat de todo
+    # mundo na hora — se o teste falhar, nada muda.
+    ok, msg = ai_providers.test_connection(
+        data.get('provider'), model=data.get('model'),
+        api_key=api_key, base_url=data.get('base_url')
+    )
+    if not ok:
+        return jsonify({"ok": False, "message": f"Nada foi alterado — {msg}"})
+
+    try:
+        ai_providers.reconfigure(
+            data.get('provider'), model=data.get('model'),
+            api_key=api_key, base_url=data.get('base_url'), persist=True
+        )
+        provedor = ai_providers.PROVIDER_LABELS.get((data.get('provider') or '').strip().lower(), '?')
+        return jsonify({"ok": True, "message": f"✅ IA principal trocada para {provedor}. Vale imediatamente para as próximas mensagens."})
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"Erro ao aplicar: {e}"})
 
 
 @bp.route('/admin/backup/config', methods=['POST'])

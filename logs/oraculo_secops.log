@@ -252,3 +252,6 @@
 10/07/2026 08:54:59 | INFO | Serving on http://0.0.0.0:5000
 10/07/2026 08:58:22 | INFO | Serving on http://0.0.0.0:5000
 10/07/2026 09:01:56 | INFO | Serving on http://0.0.0.0:5000
+10/07/2026 09:14:25 | INFO | [Anomalias] Usuário 'armazem' solicitou detecção de anomalias (baseline 7 dias).
+10/07/2026 10:17:39 | INFO | Serving on http://0.0.0.0:5000
+10/07/2026 14:11:08 | INFO | Serving on http://0.0.0.0:5000
