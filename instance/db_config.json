@@ -1,9 +1,0 @@
-{
-  "engine": "postgres",
-  "host": "10.0.0.230",
-  "port": 5432,
-  "dbname": "oraculo",
-  "user": "oraculo",
-  "password": "po.fw,h1000",
-  "pool_max": 10
-}

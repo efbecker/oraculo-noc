@@ -50,20 +50,29 @@ info "Instalando dependências Python (isso pode demorar um pouco)..."
 "$APP_DIR/venv/bin/pip" install -r "$APP_DIR/requirements.txt" -q
 
 # --- 3. config.py ----------------------------------------------------------
-# Gera o config.py real a partir do modelo versionado, só se ainda não existir
-# (nunca sobrescreve um config.py já ajustado à mão).
-if [[ -f "$APP_DIR/config.py" ]]; then
-    info "config.py já existe — mantido como está."
-else
-    info "Gerando config.py a partir do modelo, com SECRET_KEY aleatória..."
+# Gera o config.py real a partir do modelo versionado. Regenera se o arquivo
+# nao existir, estiver VAZIO, ou nao for um Python valido (evita o caso de um
+# config.py vazio/quebrado ter sido commitado por engano no repositorio).
+PRECISA_GERAR=0
+if [[ ! -s "$APP_DIR/config.py" ]]; then
+    PRECISA_GERAR=1   # nao existe ou tem 0 bytes
+elif ! "$APP_DIR/venv/bin/python" -c "import ast,sys; ast.parse(open('$APP_DIR/config.py').read())" 2>/dev/null; then
+    PRECISA_GERAR=1   # existe mas nao compila
+    info "config.py existente e invalido — sera regenerado (backup em config.py.bak)."
+    cp "$APP_DIR/config.py" "$APP_DIR/config.py.bak"
+fi
+
+if [[ "$PRECISA_GERAR" -eq 1 ]]; then
+    info "Gerando config.py a partir do modelo, com SECRET_KEY aleatoria..."
     SECRET="$("$APP_DIR/venv/bin/python" -c 'import secrets; print(secrets.token_hex(32))')"
-    # Substitui o placeholder da SECRET_KEY pela chave gerada.
     sed "s|TROQUE-por-uma-chave-aleatoria-longa|${SECRET}|" \
         "$APP_DIR/config.py.example" > "$APP_DIR/config.py"
     echo
     erro "IMPORTANTE: revise o config.py e ajuste OCI_COMPARTMENT_ID e ZABBIX_URL"
-    erro "antes de usar em produção (os valores vieram do modelo de exemplo)."
+    erro "antes de usar em producao (os valores vieram do modelo de exemplo)."
     echo
+else
+    info "config.py ja existe e e valido — mantido como esta."
 fi
 
 # Permissões: config.py tem infra sensível (SECRET_KEY) → só o dono lê.

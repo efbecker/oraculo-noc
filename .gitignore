@@ -1,19 +1,29 @@
-# Ignorar arquivos do Python e ambientes virtuais
+# ===== Python e ambiente virtual =====
 __pycache__/
 *.pyc
 venv/
 env/
 
-# Ignorar banco de dados e mídias geradas
+# ===== Banco de dados e mídias geradas =====
 *.db
 sqlite3.db
 app/static/*.html
 app/static/*.png
 app/static/*.mp3
 
-# Ignorar arquivos de configuração com senhas reais!
+# ===== Configuração com segredos (fica só no servidor) =====
+# config.py tem SECRET_KEY, URL do Zabbix e OCID da OCI. O modelo versionado
+# é o config.py.example; o install.sh gera o config.py real a partir dele.
 config.py
 !config.py.example
 
-# Ignorar configs e backups gerados em runtime (senha do Postgres, dumps do banco)
+# ===== Runtime: senha do Postgres, chave de IA, dumps, logo, backups =====
 instance/
+
+# ===== Logs =====
+logs/
+*.log
+
+# ===== Serviço systemd gerado / envs =====
+.env
+oraculo.service
