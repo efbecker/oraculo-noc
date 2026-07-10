@@ -1,0 +1,44 @@
+"""
+MODELO de configuração do Oráculo NOC.
+
+Este arquivo (config.py.example) É versionado no git. O arquivo REAL usado pela
+aplicação é o config.py, que fica FORA do git (.gitignore) por conter valores
+próprios de cada ambiente. O install.sh gera o config.py a partir deste modelo
+na primeira execução.
+
+O que continua aqui (e por que NÃO migrou para o painel):
+  - SECRET_KEY / DB_PATH / AUDIO_DIR ........ infra da aplicação, lida no boot
+  - OCI_ENDPOINT / OCI_COMPARTMENT_ID ....... endpoint/compartment do OCI GenAI
+  - ZABBIX_URL .............................. URL padrão do Zabbix (fallback)
+
+O que NÃO está mais aqui (migrou para Admin → Inteligência Artificial):
+  - a CHAVE de API da IA e a escolha de provedor/modelo. Só a chave de IA saiu;
+    o restante acima ainda é lido de config.py na inicialização.
+"""
+import os
+import tempfile
+
+# ================= CONFIGURAÇÕES GERAIS =================
+# SECRET_KEY assina as sessões de login. NUNCA use o valor de exemplo em
+# produção: gere uma aleatória com  python3 -c "import secrets; print(secrets.token_hex(32))"
+# O install.sh já gera uma automaticamente ao criar o config.py.
+SECRET_KEY = os.getenv("SECRET_KEY", "TROQUE-por-uma-chave-aleatoria-longa")
+
+# Caminho do banco SQLite (usado só quando o motor é SQLite; se você configurar
+# PostgreSQL no painel, este caminho é ignorado).
+DB_PATH = '/opt/oraculo-noc/oraculo_zabbix.db'
+
+# Pasta temporária dos áudios do TTS (recriada automaticamente).
+AUDIO_DIR = os.path.join(tempfile.gettempdir(), 'oraculo_audio')
+os.makedirs(AUDIO_DIR, exist_ok=True)
+
+# ================= CONFIGURAÇÕES DA OCI =================
+# Só relevante se o provedor de IA (no painel) for OCI/Cohere. Fora da OCI,
+# a autenticação usa ~/.oci/config (API Key) — ver MIGRACAO.md, Etapa 3.
+OCI_ENDPOINT = "https://inference.generativeai.sa-saopaulo-1.oci.oraclecloud.com"
+OCI_COMPARTMENT_ID = "ocid1.tenancy.oc1..COLOQUE_SEU_COMPARTMENT_OCID_AQUI"
+
+# ================= CONFIGURAÇÕES DO ZABBIX =================
+# URL padrão da API do Zabbix. Cada usuário pode ter uma URL própria no painel;
+# esta é o fallback global quando o usuário não define a dele.
+ZABBIX_URL = "https://monitoramento.SEU-DOMINIO.cloud/api_jsonrpc.php"
