@@ -258,3 +258,6 @@
 10/07/2026 14:20:07 | INFO | [IA Oracle] Usuário 'pollux' iniciou interação livre com o modelo.
 10/07/2026 14:20:31 | INFO | [Anomalias] Usuário 'pollux' solicitou detecção de anomalias (baseline 7 dias).
 10/07/2026 14:26:51 | INFO | Serving on http://0.0.0.0:5000
+10/07/2026 14:28:48 | INFO | [IA Oracle] Usuário 'pollux' iniciou interação livre com o modelo.
+10/07/2026 14:29:26 | INFO | [Relatório] Usuário 'pollux' solicitou relatório FinOps/Consumo para alvo: TODOS (1.0 dias).
+10/07/2026 15:56:51 | INFO | [Anomalias] Usuário 'asv' solicitou detecção de anomalias (baseline 7 dias).
