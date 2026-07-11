@@ -931,7 +931,16 @@ def db_apply():
             dbname=data.get('dbname'), user=data.get('user'), password=password, persist=True
         )
         db.init_schema()
-        return jsonify({"ok": True, "message": "✅ Configuração aplicada e tabelas verificadas/criadas com sucesso."})
+        # Banco recém-criado vem com a tabela users VAZIA — sem esta linha,
+        # migrar para um Postgres novo trancava todo mundo para fora no
+        # próximo logout (nenhum usuário existia para logar!).
+        admin_criado = db.garantir_admin_padrao()
+        msg_ok = "✅ Configuração aplicada e tabelas verificadas/criadas com sucesso."
+        if admin_criado:
+            msg_ok += (" ⚠️ Este banco estava vazio: o usuário padrão foi criado (admin / admin123) — "
+                       "os demais usuários NÃO migram automaticamente; recadastre-os ou restaure um backup. "
+                       "Troque a senha do admin após o próximo login!")
+        return jsonify({"ok": True, "message": msg_ok})
     except Exception as e:
         return jsonify({"ok": False, "message": f"Erro ao aplicar/criar tabelas: {e}"})
 
