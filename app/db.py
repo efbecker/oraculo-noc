@@ -401,3 +401,23 @@ def init_schema():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_chat_hist_user_sess ON chat_history(username, session_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user ON chat_sessions(username, created_ts)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_scans_owner_status ON scans(owner, status)")
+
+
+def garantir_admin_padrao():
+    """Garante que o usuário 'admin' padrão (senha inicial: admin123) exista no
+    banco ATIVO. Retorna True se precisou criar.
+
+    Chamada em DOIS momentos: no boot (create_app) e ao TROCAR de banco pelo
+    painel (Admin > Banco de Dados > Salvar e Aplicar). O segundo caso corrige
+    um lock-out clássico: ao migrar para um PostgreSQL recém-criado, o schema
+    era criado mas a tabela users ficava VAZIA — quem fizesse logout não
+    conseguia mais entrar em lugar nenhum."""
+    from werkzeug.security import generate_password_hash
+    row = query_one("SELECT id FROM users WHERE username=?", ("admin",))
+    if row:
+        return False
+    execute(
+        "INSERT INTO users (username, password, profile, grupo_cliente, ai_model) VALUES (?, ?, ?, ?, ?)",
+        ("admin", generate_password_hash("admin123"), "ADMINISTRADOR", "GLOBAL", "cohere.command-r-08-2024")
+    )
+    return True
