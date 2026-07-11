@@ -36,7 +36,12 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 # python3-venv: para o ambiente virtual | nmap: usado pelo Scan Profundo/SecOps
 # build-essential + libpq-dev: para compilar o psycopg2 (driver do PostgreSQL)
-apt-get install -y -qq python3 python3-venv python3-pip nmap build-essential libpq-dev
+# postgresql-client: fornece os binarios pg_dump e psql, usados pela aba Backup
+#   do painel (backup e restauracao do banco). Sem ele, o backup falha com
+#   "Binario 'pg_dump' nao encontrado no servidor". Precisa estar AQUI, na
+#   maquina da aplicacao — e nao no servidor do banco —, pois e a app que se
+#   conecta remotamente e gera o dump.
+apt-get install -y -qq python3 python3-venv python3-pip nmap build-essential libpq-dev postgresql-client
 
 # --- 2. virtualenv + dependências Python -----------------------------------
 # Boa prática: as dependências do projeto ficam ISOLADAS em ./venv, sem poluir
