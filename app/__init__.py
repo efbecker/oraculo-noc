@@ -12,14 +12,9 @@ def init_db():
     # (profile/token_zabbix/grupo_cliente/chat_history). Unificado aqui.
     db.init_schema()
 
-    # Cria o usuário Admin padrão se não existir nenhum usuário ainda.
-    row = db.query_one("SELECT id FROM users WHERE username=?", ("admin",))
-    if not row:
-        hashed_pw = generate_password_hash("admin123")
-        db.execute(
-            "INSERT INTO users (username, password, profile, grupo_cliente, ai_model) VALUES (?, ?, ?, ?, ?)",
-            ("admin", hashed_pw, "ADMINISTRADOR", "GLOBAL", "cohere.command-r-08-2024")
-        )
+    # Cria o usuário Admin padrão se não existir (função compartilhada com a
+    # rota de troca de banco do painel, para nunca deixar um banco sem admin).
+    db.garantir_admin_padrao()
 
     # Reseta scans travados caso o servidor tenha reiniciado com um scan em andamento.
     db.execute("UPDATE scans SET status='error', stage='Interrompido (Reboot)' WHERE status='running'")
