@@ -203,6 +203,13 @@ def run_backup_now():
                 erro = stderr.decode(errors="ignore")[:500]
                 if os.path.exists(dest):
                     os.remove(dest)
+                # Erro clássico: o pg_dump da máquina é mais ANTIGO que o servidor
+                # (ex.: cliente 15 contra servidor 17). A mensagem crua do Postgres
+                # é técnica demais; aqui traduzimos com a solução.
+                if "server version" in erro.lower() or "aborting" in erro.lower():
+                    erro += ("\n\n➡️ Versão do pg_dump incompatível com o servidor. Instale um cliente "
+                             "igual ou mais novo que o servidor: apt install postgresql-client-17 "
+                             "(ajuste o número para a versão do seu servidor).")
                 _registrar(started_at, engine, "error", 0, None, f"pg_dump falhou: {erro}")
                 return {"status": "error", "message": f"pg_dump falhou: {erro}"}
             size = os.path.getsize(dest)
