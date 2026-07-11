@@ -396,6 +396,10 @@ def init_schema():
         _add_column_if_missing(conn, 'chat_history', 'session_id', 'TEXT')
         _add_column_if_missing(conn, 'scans', 'owner', 'TEXT')
         _add_column_if_missing(conn, 'scans', 'session_id', 'TEXT')
+        # Perfil de IA por usuário (multi-tenant): vincula o usuário a um perfil
+        # nomeado em instance/ai_profiles.json (ex.: 'Gemini-Pollux'). Vazio/NULL
+        # = usa a IA global padrão. Migração automática em bancos existentes.
+        _add_column_if_missing(conn, 'users', 'ai_profile', 'TEXT')
 
         # Índices que ajudam as consultas mais quentes.
         cur.execute("CREATE INDEX IF NOT EXISTS idx_chat_hist_user_sess ON chat_history(username, session_id)")
