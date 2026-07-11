@@ -465,7 +465,7 @@ HTML_TEMPLATE = """
                             <td><strong>${escapeHtml(u.username)}</strong></td>
                             <td>${escapeHtml(u.profile)}</td>
                             <td><span style="color:#ff9e00; font-family: monospace;">${escapeHtml(u.grupo_cliente)}</span></td>
-                            <td><span style="color:#00e676; font-size: 12px;">${u.zabbix_url ? escapeHtml(u.zabbix_url) : '🌍 Padrão Global (config.py)'}</span></td>
+                            <td><span style="color:#00e676; font-size: 12px;">${u.zabbix_url ? escapeHtml(u.zabbix_url) : '🌍 Padrão Global'}</span></td>
                             <td class="actions-cell">
                                 <button type="button" class="btn-edit" onclick='editarUsuario(${JSON.stringify(u.username)}, ${JSON.stringify(u.profile)}, ${JSON.stringify(u.grupo_cliente)}, ${JSON.stringify(u.zabbix_url || "")}, ${JSON.stringify(u.token_zabbix || "")})'>Editar</button>
                                 <form method="POST" action="/admin/delete" style="margin: 0;" onsubmit="return confirm('Deseja excluir este usuário?');">

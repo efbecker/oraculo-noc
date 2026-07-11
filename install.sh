@@ -49,35 +49,15 @@ info "Instalando dependências Python (isso pode demorar um pouco)..."
 "$APP_DIR/venv/bin/pip" install --upgrade pip -q
 "$APP_DIR/venv/bin/pip" install -r "$APP_DIR/requirements.txt" -q
 
-# --- 3. config.py ----------------------------------------------------------
-# Gera o config.py real a partir do modelo versionado. Regenera se o arquivo
-# nao existir, estiver VAZIO, ou nao for um Python valido (evita o caso de um
-# config.py vazio/quebrado ter sido commitado por engano no repositorio).
-PRECISA_GERAR=0
-if [[ ! -s "$APP_DIR/config.py" ]]; then
-    PRECISA_GERAR=1   # nao existe ou tem 0 bytes
-elif ! "$APP_DIR/venv/bin/python" -c "import ast,sys; ast.parse(open('$APP_DIR/config.py').read())" 2>/dev/null; then
-    PRECISA_GERAR=1   # existe mas nao compila
-    info "config.py existente e invalido — sera regenerado (backup em config.py.bak)."
-    cp "$APP_DIR/config.py" "$APP_DIR/config.py.bak"
-fi
+# --- 3. Configuracao ------------------------------------------------------
+# A aplicacao NAO precisa mais de config.py. Todos os valores tem padrao no
+# codigo (app/settings.py) e sao ajustaveis pelo painel Admin ou por variaveis
+# de ambiente (arquivo .env opcional, lido pelo systemd). A SECRET_KEY e gerada
+# e persistida automaticamente em instance/secret.key no primeiro boot.
+info "Sem config.py para gerar — a app usa app/settings.py + painel Admin."
 
-if [[ "$PRECISA_GERAR" -eq 1 ]]; then
-    info "Gerando config.py a partir do modelo, com SECRET_KEY aleatoria..."
-    SECRET="$("$APP_DIR/venv/bin/python" -c 'import secrets; print(secrets.token_hex(32))')"
-    sed "s|TROQUE-por-uma-chave-aleatoria-longa|${SECRET}|" \
-        "$APP_DIR/config.py.example" > "$APP_DIR/config.py"
-    echo
-    erro "IMPORTANTE: revise o config.py e ajuste OCI_COMPARTMENT_ID e ZABBIX_URL"
-    erro "antes de usar em producao (os valores vieram do modelo de exemplo)."
-    echo
-else
-    info "config.py ja existe e e valido — mantido como esta."
-fi
-
-# Permissões: config.py tem infra sensível (SECRET_KEY) → só o dono lê.
-chown "$RUN_USER":"$RUN_USER" "$APP_DIR/config.py"
-chmod 600 "$APP_DIR/config.py"
+# Permissoes: o SECRET_KEY e os configs sensiveis ficam em instance/ (gerada
+# no primeiro boot com chmod 600 pelo proprio codigo). Nada a ajustar aqui.
 
 # --- 4. serviço systemd ----------------------------------------------------
 # Gera o unit apontando para o Python do VENV e para o diretório real do clone.
@@ -108,10 +88,11 @@ systemctl daemon-reload
 systemctl enable "$SERVICE_NAME" >/dev/null 2>&1 || true
 
 echo
-info "Instalação concluída! Próximos passos:"
-echo "   1. Revise o config.py:        nano ${APP_DIR}/config.py"
-echo "   2. (Fora da OCI) configure a API Key:  ~/.oci/config  — ver MIGRACAO.md"
-echo "   3. Suba o serviço:            sudo systemctl start ${SERVICE_NAME}"
-echo "   4. Acompanhe os logs:         journalctl -u ${SERVICE_NAME} -f"
-echo "   5. No painel Admin: configure Banco de Dados e Inteligência Artificial."
+info "Instalacao concluida! Proximos passos:"
+echo "   1. Suba o servico:            sudo systemctl start ${SERVICE_NAME}"
+echo "   2. Acompanhe os logs:         journalctl -u ${SERVICE_NAME} -f"
+echo "   3. Acesse http://IP:5000 e entre com o admin padrao (admin / admin123)."
+echo "   4. No painel Admin: troque a senha do admin, configure Banco de Dados,"
+echo "      Inteligencia Artificial e cadastre os usuarios/tokens do Zabbix."
+echo "   5. (Opcional) Fora da OCI, configure a API Key da OCI em ~/.oci/config."
 echo

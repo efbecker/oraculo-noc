@@ -4,7 +4,7 @@ import json
 import logging
 import oci
 from datetime import datetime
-from config import OCI_ENDPOINT, OCI_COMPARTMENT_ID
+from app.settings import OCI_ENDPOINT, OCI_COMPARTMENT_ID
 from app import db
 from app.services.secops import start_scan_thread
 from app.services.report_jobs import start_report_job, FIRST_STAGE as REPORT_FIRST_STAGE

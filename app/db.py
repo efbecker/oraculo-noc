@@ -48,7 +48,7 @@ import contextlib
 import sqlite3
 
 try:
-    from config import DB_PATH
+    from app.settings import DB_PATH
 except Exception:
     DB_PATH = os.environ.get('DB_PATH', 'oraculo_zabbix.db')
 

@@ -178,7 +178,7 @@ def _chat_oci(prompt, preamble, history, model):
     Autentica por API key (~/.oci/config — funciona de qualquer datacenter)
     ou, em fallback, por Instance Principals (só dentro de uma VM da OCI)."""
     import oci  # import local: quem não usa OCI não precisa do pacote instalado
-    from config import OCI_ENDPOINT, OCI_COMPARTMENT_ID
+    from app.settings import OCI_ENDPOINT, OCI_COMPARTMENT_ID
 
     try:
         oci_cfg = oci.config.from_file()

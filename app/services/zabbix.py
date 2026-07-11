@@ -6,7 +6,7 @@ import requests
 import io
 import base64
 from datetime import datetime
-from config import ZABBIX_URL
+from app.settings import ZABBIX_URL
 from app.services import branding
 
 import matplotlib

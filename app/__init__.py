@@ -2,7 +2,7 @@ import os
 from flask import Flask
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash
-from config import SECRET_KEY
+from app.settings import SECRET_KEY
 from app import db
 
 def init_db():

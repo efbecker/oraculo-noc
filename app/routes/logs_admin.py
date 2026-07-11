@@ -3,7 +3,7 @@ Visualizador de Logs — menu próprio, separado do painel Admin principal (que 
 tem bastante coisa: contas, banco de dados, backup). Admin-only.
 
 Escaneia a pasta logs/ dinamicamente (não fixa nome de arquivo), então funciona
-com qualquer *.log que a aplicação gere, sem depender do config.py real do
+com qualquer *.log que a aplicação gere, sem depender de caminhos fixos no
 servidor (que não fica no repositório por conter segredos).
 """
 import os
