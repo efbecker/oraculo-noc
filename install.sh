@@ -60,6 +60,13 @@ info "Sem config.py para gerar — a app usa app/settings.py + painel Admin."
 # no primeiro boot com chmod 600 pelo proprio codigo). Nada a ajustar aqui.
 
 # --- 4. serviço systemd ----------------------------------------------------
+# Garante que o usuario do servico consegue ESCREVER na pasta da aplicacao
+# (SQLite, instance/, logs). Sem isso, se o clone foi feito como root e o
+# servico roda como outro usuario, o boot falha com
+# "sqlite3.OperationalError: unable to open database file".
+info "Ajustando dono de ${APP_DIR} para ${RUN_USER}..."
+chown -R "$RUN_USER":"$RUN_USER" "$APP_DIR"
+
 # Gera o unit apontando para o Python do VENV e para o diretório real do clone.
 # Ajuste MemoryMax conforme a RAM da VM (regra: ~70% da RAM total).
 info "Instalando o serviço systemd '$SERVICE_NAME'..."
