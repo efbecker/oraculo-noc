@@ -235,7 +235,7 @@ HTML_TEMPLATE = """
                     <input type="password" id="db-password" placeholder="Deixe em branco p/ manter a atual">
                 </div>
             </div>
-            <p class="field-hint db-pg-field">O banco e o usuário já devem existir no servidor PostgreSQL — este painel não cria banco novo nem usuário novo, só testa a conexão e cria/atualiza as tabelas do Oráculo dentro do banco informado.</p>
+            <p class="field-hint db-pg-field">Só o USUÁRIO precisa existir no PostgreSQL (com permissão CREATEDB). O banco é criado automaticamente no teste se não existir, e as tabelas do Oráculo são criadas/atualizadas ao aplicar. Para criar o usuário (uma única vez, no servidor do banco): CREATE USER oraculo WITH PASSWORD 'SuaSenha' CREATEDB;</p>
             <div class="row-inline">
                 <button type="button" class="btn-secondary" onclick="testarConexaoDb()">🔌 Testar Conexão</button>
                 <button type="button" class="btn-submit" onclick="aplicarConfigDb()">💾 Salvar e Aplicar</button>
