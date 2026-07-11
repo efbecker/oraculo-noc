@@ -49,6 +49,18 @@ MODELO_PADRAO = {
     'openai_compat': '',  # depende do servidor (ex.: 'llama3.1' no Ollama)
 }
 
+# Endpoint padrão de cada provedor. TODOS são editáveis no painel (campo
+# "Base URL"): se o provedor mudar a URL, ou se você usar um gateway/proxy
+# corporativo (LiteLLM, Azure OpenAI, um mirror interno), basta trocar aqui
+# pela interface — sem tocar em código.
+BASE_URL_PADRAO = {
+    'openai': 'https://api.openai.com/v1',
+    'gemini': 'https://generativelanguage.googleapis.com/v1beta',
+    'anthropic': 'https://api.anthropic.com/v1',
+    'openai_compat': '',   # obrigatório informar (ex.: http://10.0.0.5:11434/v1)
+    'oci': '',             # OCI usa o endpoint do app.settings/env, não este campo
+}
+
 _state_lock = threading.Lock()
 
 
@@ -123,6 +135,113 @@ def test_connection(provider, model='', api_key='', base_url=''):
         return True, f"✅ Conexão OK com {PROVIDER_LABELS.get(cfg['provider'], cfg['provider'])} · modelo '{modelo}' · resposta: {resposta[:60]}"
     except Exception as e:
         return False, f"Falha na conexão: {e}"
+
+
+# ==========================================================================
+# PERFIS DE IA (multi-tenant): uma IA diferente por cliente
+# --------------------------------------------------------------------------
+# O painel guarda N perfis nomeados (ex.: "Gemini-Pollux", "GPT-ASV",
+# "Claude-INLOG"), cada um com provedor/modelo/chave/URL próprios. Cada usuário
+# pode ser vinculado a um perfil (coluna users.ai_profile). Quem não tiver perfil
+# definido usa o perfil PADRÃO (a config global, que é o comportamento atual).
+#
+# Por que perfis em vez de colar a chave direto no cadastro do usuário?
+#  - Uma chave por CLIENTE, não por usuário: vários usuários do mesmo cliente
+#    compartilham o perfil sem duplicar (e sem re-digitar) a chave.
+#  - Trocar a chave do Gemini = editar 1 perfil, não N usuários.
+#  - A chave continua num só lugar seguro (instance/, chmod 600), nunca no
+#    banco nem no navegador.
+# ==========================================================================
+PROFILES_FILE = os.path.join(INSTANCE_DIR, 'ai_profiles.json')
+_profiles_lock = threading.Lock()
+
+
+def _load_profiles():
+    try:
+        if os.path.exists(PROFILES_FILE):
+            with open(PROFILES_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return {}
+
+
+_PROFILES = _load_profiles()
+
+
+def _save_profiles(snapshot):
+    os.makedirs(INSTANCE_DIR, exist_ok=True)
+    with open(PROFILES_FILE, 'w', encoding='utf-8') as f:
+        json.dump(snapshot, f, indent=2)
+    try:
+        os.chmod(PROFILES_FILE, 0o600)  # contém chaves de API!
+    except Exception:
+        pass
+
+
+def list_profiles(mask_key=True):
+    """Lista os perfis salvos. Chaves mascaradas por padrão (para o painel)."""
+    with _profiles_lock:
+        perfis = {k: dict(v) for k, v in _PROFILES.items()}
+    if mask_key:
+        for p in perfis.values():
+            k = p.get('api_key') or ''
+            p['api_key'] = (f"••••••••{k[-4:]}" if len(k) > 8 else ('••••' if k else ''))
+    return perfis
+
+
+def save_profile(nome, provider, model='', api_key='', base_url=''):
+    """Cria/atualiza um perfil. api_key em branco = mantém a chave atual do
+    perfil (mesma regra dos demais campos sensíveis do painel)."""
+    nome = (nome or '').strip()
+    if not nome:
+        raise ValueError("Informe um nome para o perfil (ex.: 'Gemini-Pollux').")
+    provider = (provider or '').strip().lower()
+    if provider not in PROVIDER_LABELS:
+        raise ValueError(f"Provedor desconhecido: {provider}")
+    with _profiles_lock:
+        atual = _PROFILES.get(nome, {})
+        chave = (api_key or '').strip() or (atual.get('api_key') or '')
+        _PROFILES[nome] = {
+            'provider': provider,
+            'model': (model or '').strip(),
+            'api_key': chave,
+            'base_url': (base_url or '').strip().rstrip('/'),
+        }
+        snapshot = {k: dict(v) for k, v in _PROFILES.items()}
+    _save_profiles(snapshot)
+
+
+def delete_profile(nome):
+    with _profiles_lock:
+        if nome in _PROFILES:
+            del _PROFILES[nome]
+            snapshot = {k: dict(v) for k, v in _PROFILES.items()}
+        else:
+            return False
+    _save_profiles(snapshot)
+    return True
+
+
+def config_for_user(username):
+    """Resolve a configuração de IA que ESTE usuário deve usar:
+       1) o perfil vinculado a ele (users.ai_profile), se existir e for válido;
+       2) senão, a config global (padrão) do painel.
+    Nunca levanta exceção: qualquer problema cai no padrão global."""
+    try:
+        from app import db
+        row = db.query_one("SELECT ai_profile FROM users WHERE username=?", (username,))
+        nome = (row['ai_profile'] or '').strip() if row and row.get('ai_profile') else ''
+        if nome:
+            with _profiles_lock:
+                perfil = _PROFILES.get(nome)
+            if perfil:
+                return dict(perfil)
+    except Exception:
+        pass  # coluna ausente, banco fora, perfil apagado: usa o global
+    return current_config(mask_key=False)
 
 
 # ==========================================================================
@@ -219,7 +338,7 @@ def _chat_openai(prompt, preamble, history, model, cfg):
         if not model:
             raise ValueError("Para 'OpenAI-compatível', informe o nome do modelo (ex.: llama3.1).")
     else:
-        base = base or 'https://api.openai.com/v1'
+        base = base or BASE_URL_PADRAO['openai']
         if not cfg.get('api_key'):
             raise ValueError("Informe a API Key da OpenAI.")
 
@@ -248,8 +367,9 @@ def _chat_gemini(prompt, preamble, history, model, cfg):
                 for role, content in _normalizar_alternancia(history)]
     contents.append({"role": "user", "parts": [{"text": prompt}]})
 
+    base = (cfg.get('base_url') or '').rstrip('/') or BASE_URL_PADRAO['gemini']
     r = requests.post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+        f"{base}/models/{model}:generateContent",
         headers={"Content-Type": "application/json", "x-goog-api-key": cfg['api_key']},
         timeout=TIMEOUT,
         json={"system_instruction": {"parts": [{"text": preamble}]},
@@ -268,7 +388,8 @@ def _chat_anthropic(prompt, preamble, history, model, cfg):
                 for role, content in _normalizar_alternancia(history)]
     messages.append({"role": "user", "content": prompt})
 
-    r = requests.post("https://api.anthropic.com/v1/messages",
+    base = (cfg.get('base_url') or '').rstrip('/') or BASE_URL_PADRAO['anthropic']
+    r = requests.post(f"{base}/messages",
                       headers={"Content-Type": "application/json",
                                "x-api-key": cfg['api_key'],
                                "anthropic-version": "2023-06-01"},
