@@ -235,7 +235,16 @@ HTML_TEMPLATE = """
                     <input type="password" id="db-password" placeholder="Deixe em branco p/ manter a atual">
                 </div>
             </div>
-            <p class="field-hint db-pg-field">Só o USUÁRIO precisa existir no PostgreSQL (com permissão CREATEDB). O banco é criado automaticamente no teste se não existir, e as tabelas do Oráculo são criadas/atualizadas ao aplicar. Para criar o usuário (uma única vez, no servidor do banco): CREATE USER oraculo WITH PASSWORD 'SuaSenha' CREATEDB;</p>
+            <p class="field-hint db-pg-field">Só o USUÁRIO precisa existir no PostgreSQL (com permissão CREATEDB). O banco é criado automaticamente no teste se não existir, e as tabelas do Oráculo são criadas/atualizadas ao aplicar.</p>
+            <div class="db-pg-field" style="margin: 8px 0 4px 0;">
+                <div style="font-size:12px; color:#888; margin-bottom:4px;">
+                    Rode isto <strong>uma única vez</strong>, no servidor onde está o PostgreSQL (troque a senha):
+                </div>
+                <div style="display:flex; align-items:stretch; gap:6px;">
+                    <code id="pg-create-user-cmd" style="flex:1; background:#0d0d0d; border:1px solid #333; border-radius:6px; padding:10px 12px; color:#00e5ff; font-family:monospace; font-size:12px; overflow-x:auto; white-space:nowrap;">sudo -u postgres psql -c "CREATE USER oraculo WITH PASSWORD 'coloque_sua_senha' CREATEDB;"</code>
+                    <button type="button" class="btn-secondary" style="white-space:nowrap;" onclick="copiarComandoPg()">📋 Copiar</button>
+                </div>
+            </div>
             <div class="row-inline">
                 <button type="button" class="btn-secondary" onclick="testarConexaoDb()">🔌 Testar Conexão</button>
                 <button type="button" class="btn-submit" onclick="aplicarConfigDb()">💾 Salvar e Aplicar</button>
@@ -511,6 +520,23 @@ HTML_TEMPLATE = """
         function toggleDbFields() {
             const isPg = document.getElementById('db-engine').value === 'postgres';
             document.querySelectorAll('.db-pg-field').forEach(el => el.style.display = isPg ? '' : 'none');
+        }
+        function copiarComandoPg() {
+            const txt = document.getElementById('pg-create-user-cmd').innerText;
+            const feedback = () => mostrarStatus('db-status-msg', true, '📋 Comando copiado! Cole e execute no servidor do PostgreSQL.');
+            // navigator.clipboard só funciona em HTTPS/localhost; fallback p/ HTTP puro
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(txt).then(feedback).catch(() => fallbackCopiar(txt, feedback));
+            } else {
+                fallbackCopiar(txt, feedback);
+            }
+        }
+        function fallbackCopiar(txt, cb) {
+            const ta = document.createElement('textarea');
+            ta.value = txt; ta.style.position = 'fixed'; ta.style.opacity = '0';
+            document.body.appendChild(ta); ta.select();
+            try { document.execCommand('copy'); cb(); } catch (e) {}
+            document.body.removeChild(ta);
         }
         function coletarDbForm() {
             return {
