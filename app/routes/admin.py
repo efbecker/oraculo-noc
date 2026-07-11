@@ -21,7 +21,14 @@ def format_size(size_bytes):
         return f"{size_bytes / 1024:.1f} KB"
     return f"{size_bytes / 1024 / 1024:.1f} MB"
 
-HTML_TEMPLATE = """
+# NOTA: raw string (r""") de propósito. O template embute regex JavaScript com
+# barras invertidas (ex.: /\|\s*ERROR\s*\|/ no colorizador de logs). Numa string
+# normal, o Python tenta interpretar \| e \s como escapes DELE, não reconhece, e
+# emite "SyntaxWarning: invalid escape sequence" a cada boot — poluindo o
+# journalctl. Com r""", as barras passam intactas para o JS. Efeito colateral:
+# escapes do Python (\n, \t) NÃO funcionam mais aqui dentro — mas o template não
+# usa nenhum (verificado); tudo é HTML/JS literal.
+HTML_TEMPLATE = r"""
 <!DOCTYPE html>
 <html lang="pt-br">
 <head>
