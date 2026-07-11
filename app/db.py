@@ -113,20 +113,85 @@ def _pg_conn_kwargs(overrides=None):
 
 def test_connection(engine, host=None, port=None, dbname=None, user=None, password=None, timeout=5):
     """Testa uma conexão SEM alterar o estado global (não mexe no pool ativo).
-    Retorna (ok: bool, message: str). Usado pelo botão 'Testar Conexão'."""
+    Retorna (ok: bool, message: str). Usado pelo botão 'Testar Conexão'.
+
+    BÔNUS DE AUTOMAÇÃO: se o USUÁRIO autenticar mas o BANCO ainda não existir,
+    cria o banco automaticamente (CREATE DATABASE ... OWNER usuário) via banco
+    de manutenção 'postgres'. O que o painel NÃO consegue criar é o próprio
+    usuário — para criar o usuário 'oraculo' seria preciso autenticar como
+    OUTRO usuário (ovo e galinha); esse passo único continua sendo feito no
+    servidor Postgres: CREATE USER oraculo WITH PASSWORD '...' CREATEDB;"""
     engine = (engine or "sqlite").strip().lower()
     if engine == "sqlite":
         return True, "SQLite não precisa de teste de rede (arquivo local)."
     try:
         import psycopg2
+        from psycopg2 import sql as _pgsql
+    except ImportError:
+        return False, "Driver 'psycopg2' não instalado no servidor (pip install psycopg2-binary)."
+
+    porta = int(port or 5432)
+    criado_agora = False
+
+    # 1) Autentica no banco de manutenção 'postgres' (existe em toda instância).
+    #    Se falhar aqui, o problema é de USUÁRIO/senha/firewall — mensagem clara.
+    try:
+        conn_adm = psycopg2.connect(
+            host=host, port=porta, dbname="postgres", user=user,
+            password=password or "", connect_timeout=timeout,
+        )
+    except Exception as e_adm:
+        # pg_hba pode bloquear o usuário no banco 'postgres' mas permitir no
+        # banco alvo — tenta direto no alvo antes de desistir.
+        try:
+            conn = psycopg2.connect(
+                host=host, port=porta, dbname=dbname, user=user,
+                password=password or "", connect_timeout=timeout,
+            )
+            conn.close()
+            return True, f"Conexão OK com '{dbname}' em {host}:{porta}."
+        except Exception:
+            pass
+        return False, (
+            f"Falha na conexão/autenticação: {e_adm} — verifique se o usuário "
+            f"'{user}' existe no PostgreSQL e se a senha está correta. Para criar: "
+            f"sudo -u postgres psql -c \"CREATE USER {user} WITH PASSWORD 'SuaSenha' CREATEDB;\""
+        )
+
+    # 2) Usuário OK. O banco alvo existe? Se não, cria na hora.
+    try:
+        conn_adm.autocommit = True  # CREATE DATABASE não roda dentro de transação
+        with conn_adm.cursor() as cur:
+            cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (dbname,))
+            existe = cur.fetchone() is not None
+            if not existe:
+                # Identificadores não aceitam placeholder %s — usa sql.Identifier
+                # (quoting seguro) para blindar contra injeção via formulário.
+                cur.execute(_pgsql.SQL("CREATE DATABASE {} OWNER {}").format(
+                    _pgsql.Identifier(dbname), _pgsql.Identifier(user)
+                ))
+                criado_agora = True
+    except Exception as e_create:
+        conn_adm.close()
+        return False, (
+            f"Usuário autenticou, mas não foi possível criar o banco '{dbname}': {e_create} — "
+            f"dê a permissão CREATEDB ao usuário (ALTER USER {user} CREATEDB;) ou crie o banco "
+            f"manualmente: CREATE DATABASE {dbname} OWNER {user};"
+        )
+    finally:
+        try: conn_adm.close()
+        except Exception: pass
+
+    # 3) Confirma a conexão no banco alvo (recém-criado ou já existente).
+    try:
         conn = psycopg2.connect(
-            host=host, port=int(port or 5432), dbname=dbname, user=user,
+            host=host, port=porta, dbname=dbname, user=user,
             password=password or "", connect_timeout=timeout,
         )
         conn.close()
-        return True, f"Conexão OK com '{dbname}' em {host}:{port}."
-    except ImportError:
-        return False, "Driver 'psycopg2' não instalado no servidor (pip install psycopg2-binary)."
+        if criado_agora:
+            return True, f"Banco '{dbname}' não existia e foi CRIADO automaticamente. Conexão OK em {host}:{porta}."
+        return True, f"Conexão OK com '{dbname}' em {host}:{porta}."
     except Exception as e:
         return False, f"Falha na conexão: {e}"
 
