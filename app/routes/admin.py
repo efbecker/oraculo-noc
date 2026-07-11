@@ -173,6 +173,15 @@ HTML_TEMPLATE = r"""
                         <label>Token Zabbix</label>
                         <input type="text" name="token_zabbix" id="form-token" placeholder="Token da API">
                     </div>
+                    <div class="form-group">
+                        <label>Perfil de IA</label>
+                        <select name="ai_profile" id="form-ai-profile">
+                            <option value="">🌍 IA padrão do sistema</option>
+                            {% for nome, p in ia_profiles.items() %}
+                            <option value="{{ nome }}">{{ nome }} ({{ ia_labels.get(p.provider, p.provider) }})</option>
+                            {% endfor %}
+                        </select>
+                    </div>
                 </div>
                 <button type="submit" class="btn-submit" id="form-submit-btn">Salvar Configuração</button>
             </form>
@@ -298,6 +307,70 @@ HTML_TEMPLATE = r"""
                 <button type="button" class="btn-submit" onclick="aplicarIa()">💾 Salvar e Aplicar</button>
             </div>
             <div id="ia-status-msg" class="status-msg"></div>
+        </div>
+
+        <h2 class="content-title" style="margin-top:35px;">👥 Perfis de IA por Cliente</h2>
+        <div class="card">
+            <p class="field-hint">
+                Cada perfil é uma IA completa (provedor + modelo + chave + URL). Depois, em <strong>Usuários</strong>,
+                escolha qual perfil cada cliente usa — ex.: Pollux no Gemini, ASV no GPT, INLOG no Claude, cada um com
+                a sua própria chave. Quem não tiver perfil vinculado usa a IA padrão configurada acima.
+            </p>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>Nome do Perfil</label>
+                    <input type="text" id="perfil-nome" placeholder="Ex.: Gemini-Pollux" list="perfil-existentes">
+                    <datalist id="perfil-existentes">
+                        {% for nome in ia_profiles.keys() %}<option value="{{ nome }}">{% endfor %}
+                    </datalist>
+                </div>
+                <div class="form-group">
+                    <label>Provedor</label>
+                    <select id="perfil-provider" onchange="togglePerfilFields()">
+                        {% for k, v in ia_labels.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Modelo</label>
+                    <input type="text" id="perfil-model" placeholder="(em branco = padrão do provedor)" list="perfil-model-sugestoes">
+                    <datalist id="perfil-model-sugestoes"></datalist>
+                </div>
+                <div class="form-group perfil-key-field">
+                    <label>API Key</label>
+                    <input type="password" id="perfil-api-key" placeholder="Deixe em branco p/ não alterar">
+                </div>
+                <div class="form-group">
+                    <label>Base URL (opcional)</label>
+                    <input type="text" id="perfil-base-url" placeholder="(em branco = endpoint oficial do provedor)">
+                </div>
+            </div>
+            <p class="field-hint" id="perfil-hint"></p>
+            <div class="row-inline">
+                <button type="button" class="btn-secondary" onclick="testarPerfil()">🔌 Testar</button>
+                <button type="button" class="btn-submit" onclick="salvarPerfil()">💾 Salvar Perfil</button>
+            </div>
+            <div id="perfil-status-msg" class="status-msg"></div>
+
+            <table class="data-table" style="margin-top:20px;">
+                <thead><tr><th>PERFIL</th><th>PROVEDOR</th><th>MODELO</th><th>API KEY</th><th>BASE URL</th><th>AÇÕES</th></tr></thead>
+                <tbody>
+                {% for nome, p in ia_profiles.items() %}
+                    <tr>
+                        <td><strong>{{ nome }}</strong></td>
+                        <td>{{ ia_labels.get(p.provider, p.provider) }}</td>
+                        <td><span style="font-family:monospace; color:#00e5ff;">{{ p.model or '(padrão)' }}</span></td>
+                        <td><span style="font-family:monospace; color:#888;">{{ p.api_key or '—' }}</span></td>
+                        <td><span style="font-family:monospace; color:#888; font-size:12px;">{{ p.base_url or '(oficial)' }}</span></td>
+                        <td>
+                            <button type="button" class="btn-edit" onclick="editarPerfil('{{ nome }}', '{{ p.provider }}', '{{ p.model }}', '{{ p.base_url }}')">Editar</button>
+                            <button type="button" class="btn-delete" onclick="excluirPerfil('{{ nome }}')">Excluir</button>
+                        </td>
+                    </tr>
+                {% else %}
+                    <tr><td colspan="6" style="color:#666;">Nenhum perfil criado — todos os usuários usam a IA padrão acima.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
         </div>
         </section>
 
@@ -630,6 +703,61 @@ HTML_TEMPLATE = r"""
             } catch (e) { mostrarStatus('ia-status-msg', false, 'Erro de comunicação: ' + e); }
         }
         toggleIaFields();
+        // ---------- Perfis de IA por cliente ----------
+        function togglePerfilFields() {
+            const p = document.getElementById('perfil-provider').value;
+            document.querySelector('.perfil-key-field').style.display = (p === 'oci') ? 'none' : '';
+            document.getElementById('perfil-hint').innerText = IA_DICAS[p] || '';
+            document.getElementById('perfil-model-sugestoes').innerHTML =
+                (IA_SUGESTOES[p] || []).map(m => `<option value="${m}">`).join('');
+        }
+        function coletarPerfilForm() {
+            return {
+                nome: document.getElementById('perfil-nome').value.trim(),
+                provider: document.getElementById('perfil-provider').value,
+                model: document.getElementById('perfil-model').value.trim(),
+                api_key: document.getElementById('perfil-api-key').value.trim(),
+                base_url: document.getElementById('perfil-base-url').value.trim()
+            };
+        }
+        function editarPerfil(nome, provider, model, baseUrl) {
+            document.getElementById('perfil-nome').value = nome;
+            document.getElementById('perfil-provider').value = provider;
+            document.getElementById('perfil-model').value = model || '';
+            document.getElementById('perfil-base-url').value = baseUrl || '';
+            document.getElementById('perfil-api-key').value = '';   // nunca ecoa a chave
+            document.getElementById('perfil-api-key').placeholder = 'Deixe em branco p/ manter a chave atual';
+            togglePerfilFields();
+            window.scrollTo({ top: document.getElementById('perfil-nome').offsetTop - 100, behavior: 'smooth' });
+        }
+        async function testarPerfil() {
+            mostrarStatus('perfil-status-msg', true, '🔄 Testando o perfil no provedor...');
+            try {
+                const r = await fetch('/admin/ai/profile/test', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(coletarPerfilForm()) });
+                const data = await r.json();
+                mostrarStatus('perfil-status-msg', data.ok, data.message);
+            } catch (e) { mostrarStatus('perfil-status-msg', false, 'Erro de comunicação: ' + e); }
+        }
+        async function salvarPerfil() {
+            mostrarStatus('perfil-status-msg', true, '🔄 Testando e salvando...');
+            try {
+                const r = await fetch('/admin/ai/profile/save', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(coletarPerfilForm()) });
+                const data = await r.json();
+                mostrarStatus('perfil-status-msg', data.ok, data.message);
+                if (data.ok) setTimeout(() => window.location.reload(), 1200);
+            } catch (e) { mostrarStatus('perfil-status-msg', false, 'Erro de comunicação: ' + e); }
+        }
+        async function excluirPerfil(nome) {
+            if (!confirm(`Excluir o perfil "${nome}"? Os usuários vinculados voltam a usar a IA padrão.`)) return;
+            try {
+                const r = await fetch('/admin/ai/profile/delete', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({nome}) });
+                const data = await r.json();
+                mostrarStatus('perfil-status-msg', data.ok, data.message);
+                if (data.ok) setTimeout(() => window.location.reload(), 1000);
+            } catch (e) { mostrarStatus('perfil-status-msg', false, 'Erro de comunicação: ' + e); }
+        }
+        togglePerfilFields();
+
 
         // ---------- Backup ----------
         function toggleWeekdayField() {
@@ -818,6 +946,7 @@ def index():
         db_cfg=db.current_config(),
         ia_cfg=ai_providers.current_config(),   # chave já vem MASCARADA daqui
         ia_labels=ai_providers.PROVIDER_LABELS,
+        ia_profiles=ai_providers.list_profiles(),   # chaves MASCARADAS
         backup_cfg=backup_manager.load_config(),
         backups=backup_manager.historico(),
         logo=branding.logo_info(),
@@ -868,6 +997,7 @@ def save_user():
     profile = request.form.get('profile')
     grupo_cliente = request.form.get('grupo_cliente').strip()
     token_zabbix = request.form.get('token_zabbix').strip()
+    ai_profile = (request.form.get('ai_profile') or '').strip()
     zabbix_url = request.form.get('zabbix_url').strip()
     
     user = db.query_one("SELECT id FROM users WHERE username=?", (username,))
@@ -876,8 +1006,8 @@ def save_user():
         # ai_model saiu do formulário (o provedor/modelo agora é global, em
         # Admin > Inteligência Artificial) — o UPDATE preserva o valor antigo
         # da coluna, que segue como fallback legado para OCI.
-        query = "UPDATE users SET profile=?, grupo_cliente=?, zabbix_url=?"
-        params = [profile, grupo_cliente, zabbix_url]
+        query = "UPDATE users SET profile=?, grupo_cliente=?, zabbix_url=?, ai_profile=?"
+        params = [profile, grupo_cliente, zabbix_url, ai_profile]
         if password and password.strip() != "":
             query += ", password=?"
             params.append(generate_password_hash(password))  # nunca grava texto puro
@@ -895,8 +1025,8 @@ def save_user():
         else:
             senha_hash = generate_password_hash(secrets.token_urlsafe(24))
         db.execute(
-            "INSERT INTO users (username, password, profile, grupo_cliente, token_zabbix, zabbix_url, ai_model) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (username, senha_hash, profile, grupo_cliente, token_zabbix, zabbix_url, 'cohere.command-r-08-2024')
+            "INSERT INTO users (username, password, profile, grupo_cliente, token_zabbix, zabbix_url, ai_model, ai_profile) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (username, senha_hash, profile, grupo_cliente, token_zabbix, zabbix_url, 'cohere.command-r-08-2024', ai_profile)
         )
     return redirect(request.referrer or url_for('admin.index'))
 
@@ -1026,6 +1156,68 @@ def ai_apply():
         return jsonify({"ok": True, "message": f"✅ IA principal trocada para {provedor}. Vale imediatamente para as próximas mensagens."})
     except Exception as e:
         return jsonify({"ok": False, "message": f"Erro ao aplicar: {e}"})
+
+
+def _chave_do_perfil(nome, api_key):
+    """Chave em branco = mantém a já salva no perfil (mesma regra dos demais
+    campos sensíveis: o painel nunca ecoa a chave de volta ao navegador)."""
+    api_key = (api_key or '').strip()
+    if api_key:
+        return api_key
+    perfis = ai_providers.list_profiles(mask_key=False)
+    return (perfis.get(nome, {}) or {}).get('api_key', '')
+
+
+@bp.route('/admin/ai/profile/test', methods=['POST'])
+def ai_profile_test():
+    guard = _admin_only_json()
+    if guard: return guard
+    d = request.json or {}
+    ok, msg = ai_providers.test_connection(
+        d.get('provider'), model=d.get('model'),
+        api_key=_chave_do_perfil(d.get('nome'), d.get('api_key')),
+        base_url=d.get('base_url')
+    )
+    return jsonify({"ok": ok, "message": msg})
+
+
+@bp.route('/admin/ai/profile/save', methods=['POST'])
+def ai_profile_save():
+    guard = _admin_only_json()
+    if guard: return guard
+    d = request.json or {}
+    nome = (d.get('nome') or '').strip()
+    if not nome:
+        return jsonify({"ok": False, "message": "Informe um nome para o perfil (ex.: 'Gemini-Pollux')."})
+
+    chave = _chave_do_perfil(nome, d.get('api_key'))
+    # Testa ANTES de salvar: perfil quebrado derrubaria o chat do cliente vinculado.
+    ok, msg = ai_providers.test_connection(d.get('provider'), model=d.get('model'),
+                                           api_key=chave, base_url=d.get('base_url'))
+    if not ok:
+        return jsonify({"ok": False, "message": f"Nada foi salvo — {msg}"})
+    try:
+        ai_providers.save_profile(nome, d.get('provider'), model=d.get('model'),
+                                  api_key=chave, base_url=d.get('base_url'))
+        return jsonify({"ok": True, "message": f"✅ Perfil '{nome}' salvo. Vincule-o a um cliente em Admin → Usuários."})
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"Erro ao salvar: {e}"})
+
+
+@bp.route('/admin/ai/profile/delete', methods=['POST'])
+def ai_profile_delete():
+    guard = _admin_only_json()
+    if guard: return guard
+    nome = ((request.json or {}).get('nome') or '').strip()
+    try:
+        # Desvincula os usuários: sem isso, eles apontariam para um perfil
+        # inexistente (o config_for_user já cai no padrão, mas o campo ficaria sujo).
+        db.execute("UPDATE users SET ai_profile=NULL WHERE ai_profile=?", (nome,))
+        if ai_providers.delete_profile(nome):
+            return jsonify({"ok": True, "message": f"Perfil '{nome}' excluído. Usuários vinculados voltaram à IA padrão."})
+        return jsonify({"ok": False, "message": f"Perfil '{nome}' não encontrado."})
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"Erro ao excluir: {e}"})
 
 
 @bp.route('/admin/backup/config', methods=['POST'])
