@@ -2,10 +2,9 @@ import os
 import re
 import json
 import logging
-import oci
 from datetime import datetime
-from app.settings import OCI_ENDPOINT, OCI_COMPARTMENT_ID
 from app import db
+from app.services import ai_providers
 from app.services.secops import start_scan_thread
 from app.services.report_jobs import start_report_job, FIRST_STAGE as REPORT_FIRST_STAGE
 from app.services.zabbix import (
@@ -79,36 +78,40 @@ def obter_contexto_zabbix_real_time(token, grupo, url=None):
         return f"ERRO_ZABBIX: {str(e)}"
 
 def exec_chat_with_oracle(prompt, username="admin", context="", chat_history_rows=None):
-    model_id = get_user_model(username)
+    """Envia a pergunta para a IA configurada NO PAINEL (Admin > Inteligência
+    Artificial) — pode ser OCI, OpenAI, Gemini, Anthropic ou qualquer endpoint
+    compatível (Groq, DeepSeek, Ollama local...).
+
+    MULTI-TENANT: se o usuário tiver um PERFIL de IA vinculado (Admin > Usuários
+    > campo 'Perfil de IA'), usa a config desse perfil — permitindo, por exemplo,
+    o cliente Pollux no Gemini, o ASV no GPT e o INLOG no Claude, cada um com a
+    SUA chave. Sem perfil vinculado, usa a configuração global padrão."""
+    cfg = ai_providers.config_for_user(username)
+
+    preamble = f"""Você é o Oráculo, um especialista de NOC Sênior.
+    SEMPRE consulte o contexto abaixo para responder. Se o usuário perguntar por algo que está no contexto, use os dados exatos.
+    CONTEXTO ATUAL: {context}
+    Seja direto, técnico e use bullet points."""
+
+    # Histórico normalizado para o formato neutro (role, content). As respostas
+    # HTML (relatórios/gráficos) são puladas: são enormes e não ajudam o modelo.
+    history = []
+    if chat_history_rows:
+        for row in chat_history_rows:
+            if row['is_html'] == 1:
+                continue
+            role = 'user' if row['sender'] == 'user' else 'assistant'
+            history.append((role, row['content']))
+
     try:
-        signer = oci.auth.signers.InstancePrincipalsSecurityTokenSigner()
-        client = oci.generative_ai_inference.GenerativeAiInferenceClient(
-            config={}, signer=signer, service_endpoint=OCI_ENDPOINT, retry_strategy=oci.retry.NoneRetryStrategy()
-        )
-        
-        preamble = f"""Você é o Oráculo, um especialista de NOC Sênior. 
-        SEMPRE consulte o contexto abaixo para responder. Se o usuário perguntar por algo que está no contexto, use os dados exatos.
-        CONTEXTO ATUAL: {context}
-        Seja direto, técnico e use bullet points."""
-        
-        cohere_history = []
-        if chat_history_rows:
-            for row in chat_history_rows:
-                if row['is_html'] == 1: continue
-                role = "USER" if row['sender'] == 'user' else "CHATBOT"
-                cohere_history.append(oci.generative_ai_inference.models.CohereChatBotMessage(role=role, message=row['content']))
-                
-        chat_request = oci.generative_ai_inference.models.CohereChatRequest(
-            api_format="COHERE", message=prompt, chat_history=cohere_history, preamble_override=preamble, max_tokens=2048, temperature=0.3
-        )
-        details = oci.generative_ai_inference.models.ChatDetails(
-            compartment_id=OCI_COMPARTMENT_ID, serving_mode=oci.generative_ai_inference.models.OnDemandServingMode(model_id=model_id), chat_request=chat_request
-        )
-        resp = client.chat(details)
-        return resp.data.chat_response.text
+        return ai_providers.chat(prompt, preamble, history,
+                                 modelo_usuario=get_user_model(username), cfg=cfg)
     except Exception as e:
-        logger.error(f"[IA Oracle] Erro para o usuário '{username}': {str(e)}")
-        return f"⚠️ **Falha de IA (Oracle OCI):**\nO Zabbix enviou os dados, mas a IA recusou a conexão.\nErro: `{str(e)}`"
+        provedor = ai_providers.PROVIDER_LABELS.get(cfg.get('provider', ''), cfg.get('provider', '?'))
+        logger.error(f"[IA:{cfg.get('provider')}] Erro para o usuário '{username}': {e}")
+        return (f"⚠️ **Falha de IA ({provedor}):**\nOs dados do Zabbix vieram, mas a IA recusou a conexão.\n"
+                f"Erro: `{e}`\n\n*Verifique o provedor, a chave e o modelo em Admin → Inteligência Artificial.*")
+
 
 def process_oraculo_message(message, username, token_zabbix, grupo_cliente, tts_enabled=False, history_rows=None, zabbix_url=None, session_id=None):
     if not zabbix_url: zabbix_url = get_user_zabbix_url(username)
