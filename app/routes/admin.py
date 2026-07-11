@@ -1028,7 +1028,11 @@ def save_user():
             "INSERT INTO users (username, password, profile, grupo_cliente, token_zabbix, zabbix_url, ai_model, ai_profile) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (username, senha_hash, profile, grupo_cliente, token_zabbix, zabbix_url, 'cohere.command-r-08-2024', ai_profile)
         )
-    return redirect(request.referrer or url_for('admin.index'))
+    # Redireciona SEMPRE para o painel de usuários, sem depender de request.referrer.
+    # Atrás de um proxy (Cloudflare/nginx), o referrer pode vir vazio ou apontando
+    # para a própria URL do POST — o navegador então fazia GET em /admin/save,
+    # que só aceita POST: era a origem do "405 Method Not Allowed" ao salvar.
+    return redirect('/admin#usuarios')
 
 @bp.route('/admin/delete', methods=['POST'])
 @bp.route('/delete', methods=['POST'])
@@ -1037,7 +1041,11 @@ def delete_user():
         return "Acesso Negado.", 403
     user_id = request.form.get('id')
     db.execute("DELETE FROM users WHERE id=?", (user_id,))
-    return redirect(request.referrer or url_for('admin.index'))
+    # Redireciona SEMPRE para o painel de usuários, sem depender de request.referrer.
+    # Atrás de um proxy (Cloudflare/nginx), o referrer pode vir vazio ou apontando
+    # para a própria URL do POST — o navegador então fazia GET em /admin/save,
+    # que só aceita POST: era a origem do "405 Method Not Allowed" ao salvar.
+    return redirect('/admin#usuarios')
 
 
 def _admin_only_json():
