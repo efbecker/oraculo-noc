@@ -47,7 +47,6 @@ def index():
 def send_message():
     data = request.json
     message = data.get("message", "").strip()
-    tts_enabled = data.get("tts_enabled", False)
     
     if not message: return jsonify({"error": "Mensagem vazia"}), 400
 
@@ -84,7 +83,7 @@ def send_message():
         return jsonify({"error": f"Erro histórico: {str(e)}"}), 500
 
     res = process_oraculo_message(
-        message, username, token_zabbix, grupo_cliente, tts_enabled=tts_enabled, 
+        message, username, token_zabbix, grupo_cliente,
         history_rows=chat_history_rows, zabbix_url=zabbix_url, session_id=session_id
     )
 
