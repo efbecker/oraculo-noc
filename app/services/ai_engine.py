@@ -113,7 +113,7 @@ def exec_chat_with_oracle(prompt, username="admin", context="", chat_history_row
                 f"Erro: `{e}`\n\n*Verifique o provedor, a chave e o modelo em Admin → Inteligência Artificial.*")
 
 
-def process_oraculo_message(message, username, token_zabbix, grupo_cliente, tts_enabled=False, history_rows=None, zabbix_url=None, session_id=None):
+def process_oraculo_message(message, username, token_zabbix, grupo_cliente, history_rows=None, zabbix_url=None, session_id=None):
     if not zabbix_url: zabbix_url = get_user_zabbix_url(username)
     
     msg_l = message.lower()
@@ -138,7 +138,7 @@ def process_oraculo_message(message, username, token_zabbix, grupo_cliente, tts_
 
         job_id = start_report_job(username, label, _gerar, session_id=session_id)
         if not job_id:
-            return {"reply": "⚠️ Não foi possível iniciar a análise. Tente novamente.", "audio_path": None, "is_html": 0}
+            return {"reply": "⚠️ Não foi possível iniciar a análise. Tente novamente.", "is_html": 0}
 
         intro = ("🔍 **Detecção de Anomalias iniciada!**\nEstou comparando o comportamento da última hora "
                  f"de cada métrica contra o padrão dos últimos {dias} dias.\n\n"
@@ -166,7 +166,7 @@ def process_oraculo_message(message, username, token_zabbix, grupo_cliente, tts_
 
         job_id = start_report_job(username, label, _gerar, session_id=session_id)
         if not job_id:
-            return {"reply": "⚠️ Não foi possível iniciar a análise. Tente novamente.", "audio_path": None, "is_html": 0}
+            return {"reply": "⚠️ Não foi possível iniciar a análise. Tente novamente.", "is_html": 0}
 
         intro = ("📈 **Previsão de Capacidade iniciada!**\nEstou projetando a tendência de crescimento "
                  f"de discos, CPU, memória e interfaces de rede com base nos últimos {dias} dias.\n\n"
@@ -218,7 +218,7 @@ def process_oraculo_message(message, username, token_zabbix, grupo_cliente, tts_
 
         job_id = start_report_job(username, label, _gerar, session_id=session_id)
         if not job_id:
-            return {"reply": "⚠️ Não foi possível iniciar o relatório. Tente novamente.", "audio_path": None, "is_html": 0}
+            return {"reply": "⚠️ Não foi possível iniciar o relatório. Tente novamente.", "is_html": 0}
 
         intro = ("📊 **Relatório em processamento!**\nEstou coletando os dados do seu ambiente no Zabbix.\n\n"
                  "*Assim que terminar, o relatório aparecerá automaticamente aqui no chat.*")
@@ -231,21 +231,19 @@ def process_oraculo_message(message, username, token_zabbix, grupo_cliente, tts_
             logger.warning(f"[SecOps BLOCKED] Scan NEGADO. Usuário '{username}' (Perfil: {perfil}) tentou acionar ferramenta ofensiva.")
             return {
                 "reply": "🛡️ **Acesso negado.**\nA varredura de segurança (Nmap) é uma ferramenta ofensiva restrita a **administradores**. Seu perfil não tem permissão para executá-la.",
-                "audio_path": None,
                 "is_html": 0
             }
             
-        ip_match = re.search(r'\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}|\b(?:\d{1,3}\.){3}\d{1,3}\b', msg_l)
+        ip_match = re.search(r'\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2}|\b(?:\d{1,3}\.){3}\d{1,3}\b', msg_l)
         target = ip_match.group(0) if ip_match else "127.0.0.1"
         
         # LOG CRÍTICO DE AUDITORIA
         logger.warning(f"[SecOps AUDIT] 🚨 Usuário '{username}' (Perfil: {perfil}) INICIOU scan profundo no alvo: {target}.")
         
-        scan_id = start_scan_thread(target, username, tts_enabled, session_id=session_id)
+        scan_id = start_scan_thread(target, username, session_id=session_id)
         if not scan_id:
             return {
                 "reply": "🛡️ **Acesso negado.**\nA varredura de segurança (Nmap) é restrita a **administradores**.",
-                "audio_path": None,
                 "is_html": 0
             }
         msg_reply = f"🛡️ **SecOps Ativado!**\nIniciando scan profundo no alvo: `{target}`.\n\n*O processo está rodando em background. Assim que o scan terminar, o relatório será gerado automaticamente aqui no chat.*"
@@ -258,10 +256,9 @@ def process_oraculo_message(message, username, token_zabbix, grupo_cliente, tts_
         logger.error(f"[Zabbix] Falha de comunicação para o usuário '{username}': {context}")
         return {
             "reply": f"🚨 **Não consegui conectar ao Zabbix!**\n\nMotivo:\n`{context}`", 
-            "audio_path": None, 
             "is_html": 0
         }
 
     logger.info(f"[IA Oracle] Usuário '{username}' iniciou interação livre com o modelo.")
     reply = exec_chat_with_oracle(message, username=username, context=context, chat_history_rows=history_rows)
-    return {"reply": reply, "audio_path": None}
+    return {"reply": reply}
