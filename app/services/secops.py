@@ -92,7 +92,7 @@ def update_scan_progress(scan_id, progress, stage, status="running", result_json
         # Antes era 'pass' silencioso: um lock aqui derrubava a barra sem deixar rastro.
         logger.warning(f"[SecOps] Falha ao atualizar progresso do scan {scan_id}: {e}")
 
-def start_scan_thread(target, username, tts_enabled=False, session_id=None):
+def start_scan_thread(target, username, session_id=None):
     # --- Defesa em profundidade: reforça a regra admin-only na própria camada
     #     do SecOps, independente de quem chamou. Fonte única da verdade em ai_engine. ---
     try:
