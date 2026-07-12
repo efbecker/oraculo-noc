@@ -1,5 +1,5 @@
 from functools import wraps
-from flask import Blueprint, request, jsonify, session, redirect, url_for, render_template
+from flask import Blueprint, request, jsonify, session, redirect, url_for, render_template, render_template_string
 from werkzeug.security import generate_password_hash, check_password_hash
 from app import db
 from app.services import branding
@@ -23,6 +23,55 @@ def login_required(f):
             return redirect(url_for('auth.login'))
         return f(*args, **kwargs)
     return decorated_function
+
+
+def admin_required(f):
+    """Protege as páginas do painel Admin distinguindo DOIS casos que antes eram
+    tratados igual (um seco "Acesso Negado." em texto puro):
+
+      - NÃO LOGADO  -> manda para a tela de login (guardando a URL de destino,
+                       para voltar direto ao painel depois de autenticar).
+      - LOGADO, mas sem perfil de admin -> mostra uma página 403 decente, com
+                       link de volta ao chat. É o único caso de "acesso negado"
+                       de verdade.
+
+    APIs (/admin/... chamadas via fetch) continuam recebendo JSON, para o
+    JavaScript não tentar renderizar HTML de login dentro de um alerta."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'user_id' not in session:
+            # Guarda o destino para voltar direto ao painel após autenticar.
+            session['next_url'] = request.full_path.rstrip('?')
+            return redirect(url_for('auth.login'))
+        if session.get('profile') not in ['ADMIN', 'ADMINISTRADOR']:
+            return render_template_string(PAGINA_ACESSO_NEGADO,
+                                          usuario=session.get('username', '')), 403
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+PAGINA_ACESSO_NEGADO = """
+<!DOCTYPE html><html lang="pt-br"><head><meta charset="utf-8">
+<title>Acesso Negado — Oráculo</title>
+<style>
+  body { background:#121212; color:#e0e0e0; font-family:sans-serif; display:flex;
+         align-items:center; justify-content:center; height:100vh; margin:0; }
+  .box { background:#1e1e1e; border:1px solid #333; border-radius:10px; padding:40px;
+         max-width:460px; text-align:center; }
+  h1 { color:#ff9e00; margin:0 0 10px; font-size:22px; }
+  p { color:#aaa; line-height:1.6; }
+  a { display:inline-block; margin-top:18px; background:#00e5ff; color:#000;
+      padding:10px 22px; border-radius:6px; text-decoration:none; font-weight:bold; }
+</style></head><body>
+  <div class="box">
+    <h1>🔒 Acesso restrito</h1>
+    <p>Olá, <strong>{{ usuario }}</strong>. Esta área é exclusiva para administradores
+       e sua conta não tem essa permissão.</p>
+    <p>Se você precisa de acesso, fale com o administrador do Oráculo.</p>
+    <a href="/chat">← Voltar ao Chat</a>
+  </div>
+</body></html>
+"""
 
 @bp.route("/login", methods=["GET", "POST"])
 def login():
@@ -68,7 +117,11 @@ def login():
                 session['grupo_cliente'] = user['grupo_cliente']
                 session['zabbix_url'] = user['zabbix_url']
                 session['ai_model'] = user['ai_model']
-                return jsonify({"status": "ok"})
+
+                # Se o usuário tentou abrir uma página protegida antes de logar
+                # (ex.: /admin), volta direto pra lá em vez de cair sempre no chat.
+                destino = session.pop('next_url', None) or '/chat'
+                return jsonify({"status": "success", "redirect": destino})
             return jsonify({"error": "Credenciais inválidas"}), 401
         except Exception as e:
             return jsonify({"error": str(e)}), 500
