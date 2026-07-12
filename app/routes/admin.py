@@ -4,6 +4,7 @@ from werkzeug.security import generate_password_hash
 from flask import Blueprint, request, redirect, url_for, session, render_template_string, jsonify, send_file
 from app import db
 from app.services import backup_manager, branding, ai_providers
+from app.routes.auth import admin_required
 
 bp = Blueprint('admin', __name__)
 
@@ -942,9 +943,8 @@ HTML_TEMPLATE = r"""
 
 @bp.route('/', methods=['GET'])
 @bp.route('/admin', methods=['GET'])
+@admin_required
 def index():
-    if session.get('profile') not in ['ADMIN', 'ADMINISTRADOR']:
-        return "Acesso Negado.", 403
     # A tabela de usuários NÃO é mais embutida aqui (com milhares de contas,
     # renderizar tudo de uma vez travaria a página) — ela é carregada via
     # /admin/users/list, paginada, pelo JS assim que a aba "Usuários" abre.
@@ -996,9 +996,8 @@ def users_list():
 
 @bp.route('/admin/save', methods=['POST'])
 @bp.route('/save', methods=['POST'])
+@admin_required
 def save_user():
-    if session.get('profile') not in ['ADMIN', 'ADMINISTRADOR']:
-        return "Acesso Negado.", 403
     username = request.form.get('username').strip()
     password = request.form.get('password')
     profile = request.form.get('profile')
@@ -1043,9 +1042,8 @@ def save_user():
 
 @bp.route('/admin/delete', methods=['POST'])
 @bp.route('/delete', methods=['POST'])
+@admin_required
 def delete_user():
-    if session.get('profile') not in ['ADMIN', 'ADMINISTRADOR']:
-        return "Acesso Negado.", 403
     user_id = request.form.get('id')
     db.execute("DELETE FROM users WHERE id=?", (user_id,))
     # Redireciona SEMPRE para o painel de usuários, sem depender de request.referrer.
@@ -1265,9 +1263,8 @@ def backup_run_now():
 
 
 @bp.route('/admin/backup/download/<int:backup_id>', methods=['GET'])
+@admin_required
 def backup_download(backup_id):
-    if session.get('profile') not in ['ADMIN', 'ADMINISTRADOR']:
-        return "Acesso Negado.", 403
     row = backup_manager.get_backup(backup_id)
     if not row or row.get('status') != 'ok' or not row.get('file_path') or not os.path.exists(row['file_path']):
         return "Arquivo de backup não encontrado.", 404
