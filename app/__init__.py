@@ -38,10 +38,5 @@ def create_app():
     app.register_blueprint(chat.bp)
     app.register_blueprint(admin.bp)
     app.register_blueprint(logs_admin.bp)
-    # Blueprint de voz (V2/OCI) desativado por enquanto — projeto pausado.
-    # O arquivo app/routes/voice.py continua no repositório, só não é mais
-    # registrado. Para retomar no futuro, reative as 2 linhas abaixo:
-    # from app.routes import voice
-    # app.register_blueprint(voice.bp)
 
     return app
