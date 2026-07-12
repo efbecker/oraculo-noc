@@ -22,7 +22,6 @@ O que ANTES exigia config.py e agora nao exige mais:
 """
 import os
 import secrets
-import tempfile
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -65,11 +64,6 @@ SECRET_KEY = _load_or_create_secret()
 # Usado apenas quando o motor e SQLite. Ao configurar PostgreSQL no painel,
 # este caminho e ignorado.
 DB_PATH = os.environ.get('DB_PATH', os.path.join(BASE_DIR, 'oraculo_zabbix.db'))
-
-
-# ================= Audios do TTS =================
-AUDIO_DIR = os.environ.get('AUDIO_DIR', os.path.join(tempfile.gettempdir(), 'oraculo_audio'))
-os.makedirs(AUDIO_DIR, exist_ok=True)
 
 
 # ================= Zabbix (fallback global) =================
