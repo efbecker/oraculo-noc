@@ -46,7 +46,14 @@ async function doLogin(){
             headers:{"Content-Type":"application/json"}, 
             body:JSON.stringify({username:u, password:p}) 
         });
-        if(res.ok){ window.location.href = "/"; } 
+        if(res.ok){
+            // Se o usuário tentou abrir uma página protegida antes de logar
+            // (ex.: /admin), o backend devolve esse destino para voltarmos
+            // direto pra lá; senão, cai no chat.
+            let destino = "/";
+            try { const d = await res.json(); if (d && d.redirect) destino = d.redirect; } catch(e) {}
+            window.location.href = destino;
+        }
         else { 
             document.getElementById("errorMsg").style.display = "block"; 
             btn.innerHTML = `<i class="fas fa-sign-in-alt"></i> Acessar Sistema`; 
