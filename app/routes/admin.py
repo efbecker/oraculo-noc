@@ -556,7 +556,7 @@ HTML_TEMPLATE = r"""
                             <td><span style="color:#ff9e00; font-family: monospace;">${escapeHtml(u.grupo_cliente)}</span></td>
                             <td><span style="color:#00e676; font-size: 12px;">${u.zabbix_url ? escapeHtml(u.zabbix_url) : '🌍 Padrão Global'}</span></td>
                             <td class="actions-cell">
-                                <button type="button" class="btn-edit" onclick='editarUsuario(${JSON.stringify(u.username)}, ${JSON.stringify(u.profile)}, ${JSON.stringify(u.grupo_cliente)}, ${JSON.stringify(u.zabbix_url || "")}, ${JSON.stringify(u.token_zabbix || "")})'>Editar</button>
+                                <button type="button" class="btn-edit" onclick='editarUsuario(${JSON.stringify(u.username)}, ${JSON.stringify(u.profile)}, ${JSON.stringify(u.grupo_cliente)}, ${JSON.stringify(u.zabbix_url || "")}, ${JSON.stringify(u.ai_profile || "")})'>Editar</button>
                                 <form method="POST" action="/admin/delete" style="margin: 0;" onsubmit="return confirm('Deseja excluir este usuário?');">
                                     <input type="hidden" name="id" value="${u.id}">
                                     <button type="submit" class="btn-danger">Excluir</button>
@@ -583,14 +583,21 @@ HTML_TEMPLATE = r"""
             usersBuscaTimer = setTimeout(() => carregarUsuarios(1), 350);  // debounce
         });
 
-        function editarUsuario(username, profile, grupo, url, token) {
+        function editarUsuario(username, profile, grupo, url, aiProfile) {
             document.getElementById('form-title').innerHTML = "📝 Editando Conta: <strong style='color:#00e5ff;'>" + username + "</strong>";
             document.getElementById('form-username').value = username;
             document.getElementById('form-username').readOnly = true;
             document.getElementById('form-profile').value = profile;
             document.getElementById('form-grupo').value = grupo;
             document.getElementById('form-url').value = url;
-            document.getElementById('form-token').value = token;
+            // Perfil de IA do usuário: sem esta linha, o select voltava sempre para
+            // "IA padrão do sistema" ao editar — e um Salvar descuidado APAGAVA o
+            // vínculo do cliente com a IA dele.
+            document.getElementById('form-ai-profile').value = aiProfile || '';
+            // Token nunca é ecoado de volta ao navegador (mesma regra da senha):
+            // em branco = mantém o token atual salvo no banco.
+            document.getElementById('form-token').value = '';
+            document.getElementById('form-token').placeholder = "Deixe em branco p/ não alterar";
             document.getElementById('form-password').placeholder = "Deixe em branco p/ não alterar";
             document.getElementById('form-submit-btn').innerText = "Atualizar Conta";
             window.scrollTo({top: 0, behavior: 'smooth'});
@@ -977,7 +984,7 @@ def users_list():
     offset = (page - 1) * per_page
 
     rows = db.query_all(
-        f"SELECT id, username, profile, grupo_cliente, zabbix_url, token_zabbix "
+        f"SELECT id, username, profile, grupo_cliente, zabbix_url, ai_profile "
         f"FROM users {where} ORDER BY username ASC LIMIT ? OFFSET ?",
         tuple(params) + (per_page, offset)
     )
