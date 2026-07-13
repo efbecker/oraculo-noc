@@ -430,7 +430,7 @@ def garantir_admin_padrao():
     if row:
         return False
     execute(
-        "INSERT INTO users (username, password, profile, grupo_cliente, ai_model) VALUES (?, ?, ?, ?, ?)",
-        ("admin", generate_password_hash("admin123"), "ADMINISTRADOR", "GLOBAL", "cohere.command-r-08-2024")
+        "INSERT INTO users (username, password, profile, grupo_cliente) VALUES (?, ?, ?, ?)",
+        ("admin", generate_password_hash("admin123"), "ADMINISTRADOR", "GLOBAL")
     )
     return True
