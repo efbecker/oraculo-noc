@@ -84,7 +84,7 @@ def login():
         password = data.get("password")
         try:
             user = db.query_one(
-                "SELECT id, password, profile, token_zabbix, grupo_cliente, zabbix_url, ai_model FROM users WHERE username=?",
+                "SELECT id, password, profile, token_zabbix, grupo_cliente, zabbix_url FROM users WHERE username=?",
                 (username,)
             )
 
@@ -116,7 +116,6 @@ def login():
                 session['token_zabbix'] = user['token_zabbix']
                 session['grupo_cliente'] = user['grupo_cliente']
                 session['zabbix_url'] = user['zabbix_url']
-                session['ai_model'] = user['ai_model']
 
                 # Se o usuário tentou abrir uma página protegida antes de logar
                 # (ex.: /admin), volta direto pra lá em vez de cair sempre no chat.
