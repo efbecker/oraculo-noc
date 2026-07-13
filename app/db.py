@@ -71,7 +71,7 @@ def _defaults_from_env():
         "dbname": os.environ.get('PG_DB', 'oraculo'),
         "user": os.environ.get('PG_USER', 'oraculo'),
         "password": os.environ.get('PG_PASSWORD', ''),
-        "pool_max": int(os.environ.get('PG_POOL_MAX', '10') or 10),
+        "pool_max": int(os.environ.get('PG_POOL_MAX', '20') or 20),
     }
 
 
@@ -244,8 +244,17 @@ def _get_pg_pool():
         with _state_lock:
             if _pg_pool is None:
                 from psycopg2 import pool as pgpool
+                # DIMENSIONAMENTO: o pool precisa ter pelo menos TANTAS conexões
+                # quanto as threads do waitress (run.py: threads=16), mais folga
+                # para as threads de background (relatórios, scans, backup).
+                # Se o pool for MENOR que as threads, o ThreadedConnectionPool
+                # levanta "connection pool exhausted" quando todas estão em uso —
+                # e a requisição do usuário morre com erro 500, em vez de esperar.
+                # Padrão 20 = 16 threads web + 4 de folga para jobs em background.
+                # Ajuste com a env PG_POOL_MAX (e confira o max_connections do
+                # servidor Postgres, cujo padrão é 100).
                 _pg_pool = pgpool.ThreadedConnectionPool(
-                    1, int(_STATE.get("pool_max") or 10), **_pg_conn_kwargs()
+                    1, int(_STATE.get("pool_max") or 20), **_pg_conn_kwargs()
                 )
     return _pg_pool
 
