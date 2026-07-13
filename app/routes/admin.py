@@ -281,7 +281,7 @@ HTML_TEMPLATE = r"""
                 <div class="form-group">
                     <label>Provedor</label>
                     <select id="ia-provider" onchange="toggleIaFields()">
-                        <option value="oci" {{ 'selected' if ia_cfg.provider == 'oci' else '' }}>Oracle OCI GenAI (Cohere)</option>
+                        <option value="" {{ 'selected' if not ia_cfg.provider else '' }}>— Nenhuma IA configurada —</option>
                         <option value="openai" {{ 'selected' if ia_cfg.provider == 'openai' else '' }}>OpenAI (GPT)</option>
                         <option value="gemini" {{ 'selected' if ia_cfg.provider == 'gemini' else '' }}>Google Gemini</option>
                         <option value="anthropic" {{ 'selected' if ia_cfg.provider == 'anthropic' else '' }}>Anthropic (Claude)</option>
@@ -663,14 +663,12 @@ HTML_TEMPLATE = r"""
 
         // ---------- Inteligência Artificial ----------
         const IA_SUGESTOES = {
-            oci: ['cohere.command-r-08-2024', 'cohere.command-r-plus-08-2024'],
             openai: ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini'],
             gemini: ['gemini-2.0-flash', 'gemini-2.5-flash', 'gemini-2.5-pro'],
             anthropic: ['claude-sonnet-4-5', 'claude-haiku-4-5'],
             openai_compat: ['llama3.1', 'deepseek-chat', 'mistral-large-latest']
         };
         const IA_DICAS = {
-            oci: 'A OCI autentica pelo arquivo ~/.oci/config do servidor (API key) ou por Instance Principals (VM na OCI) — o campo API Key não é usado.',
             openai: 'Crie a chave em platform.openai.com → API keys. Deixe a Base URL em branco.',
             gemini: 'Crie a chave gratuita em aistudio.google.com → Get API key.',
             anthropic: 'Crie a chave em console.anthropic.com → API keys.',
@@ -678,7 +676,7 @@ HTML_TEMPLATE = r"""
         };
         function toggleIaFields() {
             const p = document.getElementById('ia-provider').value;
-            document.querySelector('.ia-key-field').style.display = (p === 'oci') ? 'none' : '';
+            document.querySelector('.ia-key-field').style.display = '';
             document.querySelector('.ia-baseurl-field').style.display = (p === 'openai_compat') ? '' : 'none';
             document.getElementById('ia-hint').innerText = IA_DICAS[p] || '';
             const dl = document.getElementById('ia-model-sugestoes');
@@ -714,7 +712,7 @@ HTML_TEMPLATE = r"""
         // ---------- Perfis de IA por cliente ----------
         function togglePerfilFields() {
             const p = document.getElementById('perfil-provider').value;
-            document.querySelector('.perfil-key-field').style.display = (p === 'oci') ? 'none' : '';
+            document.querySelector('.perfil-key-field').style.display = '';
             document.getElementById('perfil-hint').innerText = IA_DICAS[p] || '';
             document.getElementById('perfil-model-sugestoes').innerHTML =
                 (IA_SUGESTOES[p] || []).map(m => `<option value="${m}">`).join('');
@@ -1009,9 +1007,8 @@ def save_user():
     user = db.query_one("SELECT id FROM users WHERE username=?", (username,))
     
     if user:
-        # ai_model saiu do formulário (o provedor/modelo agora é global, em
-        # Admin > Inteligência Artificial) — o UPDATE preserva o valor antigo
-        # da coluna, que segue como fallback legado para OCI.
+        # O modelo de IA não é mais por usuário: cada conta usa um PERFIL de IA
+        # (Admin > Inteligência Artificial) vinculado no campo ai_profile.
         query = "UPDATE users SET profile=?, grupo_cliente=?, zabbix_url=?, ai_profile=?"
         params = [profile, grupo_cliente, zabbix_url, ai_profile]
         if password and password.strip() != "":
@@ -1031,8 +1028,8 @@ def save_user():
         else:
             senha_hash = generate_password_hash(secrets.token_urlsafe(24))
         db.execute(
-            "INSERT INTO users (username, password, profile, grupo_cliente, token_zabbix, zabbix_url, ai_model, ai_profile) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (username, senha_hash, profile, grupo_cliente, token_zabbix, zabbix_url, 'cohere.command-r-08-2024', ai_profile)
+            "INSERT INTO users (username, password, profile, grupo_cliente, token_zabbix, zabbix_url, ai_profile) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (username, senha_hash, profile, grupo_cliente, token_zabbix, zabbix_url, ai_profile)
         )
     # Redireciona SEMPRE para o painel de usuários, sem depender de request.referrer.
     # Atrás de um proxy (Cloudflare/nginx), o referrer pode vir vazio ou apontando
