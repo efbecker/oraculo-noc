@@ -31,12 +31,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger('Oraculo')
 
-def get_user_model(username):
-    try:
-        row = db.query_one("SELECT ai_model FROM users WHERE username=?", (username,))
-        return row['ai_model'] if (row and row['ai_model']) else "cohere.command-r-08-2024"
-    except: return "cohere.command-r-08-2024"
-
 def get_user_profile(username):
     try:
         row = db.query_one("SELECT profile FROM users WHERE username=?", (username,))
@@ -79,7 +73,7 @@ def obter_contexto_zabbix_real_time(token, grupo, url=None):
 
 def exec_chat_with_oracle(prompt, username="admin", context="", chat_history_rows=None):
     """Envia a pergunta para a IA configurada NO PAINEL (Admin > Inteligência
-    Artificial) — pode ser OCI, OpenAI, Gemini, Anthropic ou qualquer endpoint
+    Artificial) — pode ser OpenAI, Gemini, Anthropic ou qualquer endpoint
     compatível (Groq, DeepSeek, Ollama local...).
 
     MULTI-TENANT: se o usuário tiver um PERFIL de IA vinculado (Admin > Usuários
@@ -104,13 +98,27 @@ def exec_chat_with_oracle(prompt, username="admin", context="", chat_history_row
             history.append((role, row['content']))
 
     try:
-        return ai_providers.chat(prompt, preamble, history,
-                                 modelo_usuario=get_user_model(username), cfg=cfg)
+        return ai_providers.chat(prompt, preamble, history, cfg=cfg)
+
+    except ai_providers.IANaoConfiguradaError as e:
+        # NÃO é falha técnica: é configuração faltando. O cliente não tem culpa
+        # nem entende de stack trace — mostramos uma orientação clara e curta.
+        logger.warning(f"[IA] Conta '{username}' sem IA configurada: {e}")
+        return ("🤖 **Nenhuma IA configurada para esta conta.**\n\n"
+                "Os dados do Zabbix foram consultados normalmente, mas não há um modelo de IA "
+                "vinculado à sua conta para interpretá-los.\n\n"
+                "*Peça ao administrador do Oráculo para configurar uma IA em "
+                "**Admin → Inteligência Artificial** e vinculá-la à sua conta em **Admin → Usuários**.*")
+
     except Exception as e:
         provedor = ai_providers.PROVIDER_LABELS.get(cfg.get('provider', ''), cfg.get('provider', '?'))
         logger.error(f"[IA:{cfg.get('provider')}] Erro para o usuário '{username}': {e}")
-        return (f"⚠️ **Falha de IA ({provedor}):**\nOs dados do Zabbix vieram, mas a IA recusou a conexão.\n"
-                f"Erro: `{e}`\n\n*Verifique o provedor, a chave e o modelo em Admin → Inteligência Artificial.*")
+        # Erro real de comunicação (chave inválida, provedor fora do ar, cota estourada).
+        # Mensagem curta e acionável — sem despejar o traceback na tela do cliente.
+        return (f"⚠️ **A IA ({provedor}) não respondeu.**\n\n"
+                f"Os dados do Zabbix vieram, mas o modelo recusou a conexão. "
+                f"Isso costuma ser chave de API inválida/expirada, cota esgotada ou instabilidade do provedor.\n\n"
+                f"*Peça ao administrador para revisar a configuração em **Admin → Inteligência Artificial**.*")
 
 
 def process_oraculo_message(message, username, token_zabbix, grupo_cliente, history_rows=None, zabbix_url=None, session_id=None):
