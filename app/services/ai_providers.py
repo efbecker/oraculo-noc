@@ -6,11 +6,10 @@ em código e sem reiniciar o serviço — mesmo padrão do módulo de banco (db.
 
     1) instance/ai_config.json  (gravado pelo painel Admin > Inteligência Artificial)
     2) Variáveis de ambiente:    AI_PROVIDER, AI_MODEL, AI_API_KEY, AI_BASE_URL
-    3) Padrão: 'oci' (Oracle GenAI/Cohere) — comportamento original do Oráculo.
+    3) Sem configuração: NENHUM provedor é assumido. O chat avisa o usuário que
+       é preciso configurar uma IA no painel (nada de erro técnico na cara dele).
 
-Provedores suportados (todos via REST com a lib 'requests', sem SDK novo):
-    oci .............. Oracle OCI Generative AI (Cohere) — autentica por
-                       ~/.oci/config (API key) ou Instance Principals (VM OCI)
+Provedores suportados (todos via REST com a lib 'requests', sem SDK):
     openai ........... OpenAI (GPT) — Bearer token
     gemini ........... Google Gemini — chave via header x-goog-api-key
     anthropic ........ Anthropic (Claude) — x-api-key
@@ -27,11 +26,10 @@ INSTANCE_DIR = os.path.join(BASE_DIR, 'instance')
 AI_CONFIG_FILE = os.path.join(INSTANCE_DIR, 'ai_config.json')
 
 TIMEOUT = 90       # segundos por chamada de IA
-MAX_TOKENS = 2048  # mesmo teto usado hoje com a Cohere
+MAX_TOKENS = 2048  # teto de tokens por resposta
 TEMPERATURA = 0.3  # mesma temperatura usada hoje
 
 PROVIDER_LABELS = {
-    'oci': 'Oracle OCI GenAI (Cohere)',
     'openai': 'OpenAI (GPT)',
     'gemini': 'Google Gemini',
     'anthropic': 'Anthropic (Claude)',
@@ -42,7 +40,6 @@ PROVIDER_LABELS = {
 # São sugestões estáveis; o painel tem uma lista de sugestões por provedor,
 # mas QUALQUER string aceita pelo provedor pode ser digitada.
 MODELO_PADRAO = {
-    'oci': 'cohere.command-r-08-2024',
     'openai': 'gpt-4o-mini',
     'gemini': 'gemini-2.0-flash',
     'anthropic': 'claude-sonnet-4-5',
@@ -58,7 +55,6 @@ BASE_URL_PADRAO = {
     'gemini': 'https://generativelanguage.googleapis.com/v1beta',
     'anthropic': 'https://api.anthropic.com/v1',
     'openai_compat': '',   # obrigatório informar (ex.: http://10.0.0.5:11434/v1)
-    'oci': '',             # OCI usa o endpoint do app.settings/env, não este campo
 }
 
 _state_lock = threading.Lock()
@@ -66,7 +62,7 @@ _state_lock = threading.Lock()
 
 def _defaults_from_env():
     return {
-        "provider": (os.environ.get('AI_PROVIDER') or 'oci').strip().lower(),
+        "provider": (os.environ.get('AI_PROVIDER') or '').strip().lower(),
         "model": (os.environ.get('AI_MODEL') or '').strip(),
         "api_key": (os.environ.get('AI_API_KEY') or '').strip(),
         "base_url": (os.environ.get('AI_BASE_URL') or '').strip(),
@@ -104,7 +100,7 @@ def reconfigure(provider, model='', api_key='', base_url='', persist=True):
     """Aplica a nova configuração em memória (vale IMEDIATAMENTE para as
     próximas mensagens de chat, sem reiniciar) e, se persist, grava em
     instance/ai_config.json com permissão restrita (contém a chave!)."""
-    provider = (provider or 'oci').strip().lower()
+    provider = (provider or '').strip().lower()
     if provider not in PROVIDER_LABELS:
         raise ValueError(f"Provedor desconhecido: {provider}")
     with _state_lock:
@@ -126,7 +122,7 @@ def reconfigure(provider, model='', api_key='', base_url='', persist=True):
 def test_connection(provider, model='', api_key='', base_url=''):
     """Faz uma pergunta REAL ao provedor informado (sem salvar nada) e devolve
     (ok, mensagem). Usado pelo botão 'Testar Conexão' do painel."""
-    cfg = {"provider": (provider or 'oci').strip().lower(), "model": (model or '').strip(),
+    cfg = {"provider": (provider or '').strip().lower(), "model": (model or '').strip(),
            "api_key": (api_key or '').strip(), "base_url": (base_url or '').strip().rstrip('/')}
     try:
         resposta = chat("Responda somente com a palavra: OK", "Você é um teste de conectividade.",
@@ -249,28 +245,46 @@ def config_for_user(username):
 # --------------------------------------------------------------------------
 # history: lista de tuplas (role, content) com role em {'user', 'assistant'}
 # ==========================================================================
+class IANaoConfiguradaError(Exception):
+    """A conta não tem nenhuma IA configurada (nem perfil próprio, nem padrão
+    global). Não é uma falha técnica — é configuração faltando. O chat traduz
+    isso numa orientação amigável em vez de mostrar stack trace ao cliente."""
+    pass
+
+
 def chat(prompt, preamble, history, modelo_usuario=None, cfg=None):
     if cfg is None:
         cfg = current_config(mask_key=False)
-    provider = cfg.get('provider') or 'oci'
+    provider = (cfg.get('provider') or '').strip().lower()
 
-    # Modelo efetivo: campo do painel > modelo por usuário (legado, só faz
-    # sentido na OCI, onde a coluna users.ai_model guarda ids Cohere) > padrão.
-    model = cfg.get('model') or ''
-    if not model and provider == 'oci' and modelo_usuario:
-        model = modelo_usuario
-    if not model:
-        model = MODELO_PADRAO.get(provider, '')
+    # SEM provedor definido: não assumimos nenhum provedor (antes havia um padrão, e
+    # clientes sem perfil caíam nela sem querer, recebendo um erro técnico).
+    if not provider:
+        raise IANaoConfiguradaError(
+            "Nenhuma IA está configurada para esta conta."
+        )
+    if provider not in PROVIDER_LABELS:
+        raise IANaoConfiguradaError(
+            f"O provedor de IA '{provider}' não existe mais ou não é suportado. "
+            f"Escolha um provedor válido no painel."
+        )
+    # Provedores por HTTP exigem chave (exceto servidores locais tipo Ollama,
+    # que aceitam base_url sem chave).
+    if not (cfg.get('api_key') or '').strip() and provider != 'openai_compat':
+        raise IANaoConfiguradaError(
+            f"A IA está definida como {PROVIDER_LABELS[provider]}, mas nenhuma "
+            f"chave de API foi cadastrada."
+        )
 
-    if provider == 'oci':
-        return _chat_oci(prompt, preamble, history, model)
+    model = (cfg.get('model') or '').strip() or MODELO_PADRAO.get(provider, '')
+
     if provider in ('openai', 'openai_compat'):
         return _chat_openai(prompt, preamble, history, model, cfg)
     if provider == 'gemini':
         return _chat_gemini(prompt, preamble, history, model, cfg)
     if provider == 'anthropic':
         return _chat_anthropic(prompt, preamble, history, model, cfg)
-    raise ValueError(f"Provedor de IA desconhecido: {provider}")
+    raise IANaoConfiguradaError(f"Provedor de IA desconhecido: {provider}")
 
 
 def _normalizar_alternancia(history):
@@ -290,41 +304,6 @@ def _normalizar_alternancia(history):
     if norm and norm[0][0] != 'user':
         norm.insert(0, ('user', '[Início da conversa]'))
     return norm
-
-
-def _chat_oci(prompt, preamble, history, model):
-    """Oracle OCI GenAI (Cohere) — o modo original do Oráculo.
-    Autentica por API key (~/.oci/config — funciona de qualquer datacenter)
-    ou, em fallback, por Instance Principals (só dentro de uma VM da OCI)."""
-    import oci  # import local: quem não usa OCI não precisa do pacote instalado
-    from app.settings import OCI_ENDPOINT, OCI_COMPARTMENT_ID
-
-    try:
-        oci_cfg = oci.config.from_file()
-        client = oci.generative_ai_inference.GenerativeAiInferenceClient(
-            config=oci_cfg, service_endpoint=OCI_ENDPOINT, retry_strategy=oci.retry.NoneRetryStrategy()
-        )
-    except Exception:
-        signer = oci.auth.signers.InstancePrincipalsSecurityTokenSigner()
-        client = oci.generative_ai_inference.GenerativeAiInferenceClient(
-            config={}, signer=signer, service_endpoint=OCI_ENDPOINT, retry_strategy=oci.retry.NoneRetryStrategy()
-        )
-
-    cohere_history = [
-        oci.generative_ai_inference.models.CohereChatBotMessage(
-            role=("USER" if role == 'user' else "CHATBOT"), message=content)
-        for role, content in history
-    ]
-    chat_request = oci.generative_ai_inference.models.CohereChatRequest(
-        api_format="COHERE", message=prompt, chat_history=cohere_history,
-        preamble_override=preamble, max_tokens=MAX_TOKENS, temperature=TEMPERATURA
-    )
-    details = oci.generative_ai_inference.models.ChatDetails(
-        compartment_id=OCI_COMPARTMENT_ID,
-        serving_mode=oci.generative_ai_inference.models.OnDemandServingMode(model_id=model),
-        chat_request=chat_request
-    )
-    return client.chat(details).data.chat_response.text
 
 
 def _chat_openai(prompt, preamble, history, model, cfg):
