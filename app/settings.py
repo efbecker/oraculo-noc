@@ -16,7 +16,6 @@ O que ANTES exigia config.py e agora nao exige mais:
                           (ver nota abaixo sobre sessoes).
   - ZABBIX_URL .......... cada usuario ja define a sua no painel Admin > Usuarios;
                           este e so o fallback global.
-  - OCI_ENDPOINT / OCI_COMPARTMENT_ID .. so usados quando o provedor de IA e OCI.
   - DB_PATH ............. caminho do SQLite (ignorado quando se usa PostgreSQL,
                           configurado no painel Admin > Banco de Dados).
 """
@@ -72,13 +71,3 @@ DB_PATH = os.environ.get('DB_PATH', os.path.join(BASE_DIR, 'oraculo_zabbix.db'))
 # caso, o usuario PRECISA ter uma URL propria configurada.
 ZABBIX_URL = os.environ.get('ZABBIX_URL', '').strip()
 
-
-# ================= OCI GenAI (so quando o provedor de IA e OCI) =================
-# Endpoint e compartment do Oracle Generative AI. So sao lidos quando o provedor
-# selecionado no painel Admin > Inteligencia Artificial e 'oci'. Para os demais
-# provedores (OpenAI, Gemini, Anthropic, Ollama...), sao irrelevantes.
-OCI_ENDPOINT = os.environ.get(
-    'OCI_ENDPOINT',
-    'https://inference.generativeai.sa-saopaulo-1.oci.oraclecloud.com'
-).strip()
-OCI_COMPARTMENT_ID = os.environ.get('OCI_COMPARTMENT_ID', '').strip()
