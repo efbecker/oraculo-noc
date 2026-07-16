@@ -252,7 +252,10 @@ class IANaoConfiguradaError(Exception):
     pass
 
 
-def chat(prompt, preamble, history, modelo_usuario=None, cfg=None):
+def chat(prompt, preamble, history, modelo_usuario=None, cfg=None, max_tokens=None):
+    # max_tokens: teto de tokens SÓ para esta chamada. Fica em None no chat comum
+    # (usa o MAX_TOKENS global de 2048); relatórios longos — como o SecOps — pedem
+    # um teto maior para não serem cortados no meio (era o que truncava o laudo).
     if cfg is None:
         cfg = current_config(mask_key=False)
     provider = (cfg.get('provider') or '').strip().lower()
@@ -279,11 +282,11 @@ def chat(prompt, preamble, history, modelo_usuario=None, cfg=None):
     model = (cfg.get('model') or '').strip() or MODELO_PADRAO.get(provider, '')
 
     if provider in ('openai', 'openai_compat'):
-        return _chat_openai(prompt, preamble, history, model, cfg)
+        return _chat_openai(prompt, preamble, history, model, cfg, max_tokens)
     if provider == 'gemini':
-        return _chat_gemini(prompt, preamble, history, model, cfg)
+        return _chat_gemini(prompt, preamble, history, model, cfg, max_tokens)
     if provider == 'anthropic':
-        return _chat_anthropic(prompt, preamble, history, model, cfg)
+        return _chat_anthropic(prompt, preamble, history, model, cfg, max_tokens)
     raise IANaoConfiguradaError(f"Provedor de IA desconhecido: {provider}")
 
 
@@ -306,7 +309,7 @@ def _normalizar_alternancia(history):
     return norm
 
 
-def _chat_openai(prompt, preamble, history, model, cfg):
+def _chat_openai(prompt, preamble, history, model, cfg, max_tokens=None):
     """OpenAI oficial OU qualquer API compatível (Groq, DeepSeek, Mistral,
     Ollama local...). Para compatíveis, a Base URL é obrigatória —
     ex.: http://10.0.0.50:11434/v1 (Ollama) ou https://api.groq.com/openai/v1."""
@@ -332,13 +335,13 @@ def _chat_openai(prompt, preamble, history, model, cfg):
 
     r = requests.post(f"{base}/chat/completions", headers=headers, timeout=TIMEOUT,
                       json={"model": model, "messages": messages,
-                            "max_tokens": MAX_TOKENS, "temperature": TEMPERATURA})
+                            "max_tokens": (max_tokens or MAX_TOKENS), "temperature": TEMPERATURA})
     if r.status_code != 200:
         raise RuntimeError(f"HTTP {r.status_code}: {r.text[:200]}")
     return r.json()['choices'][0]['message']['content']
 
 
-def _chat_gemini(prompt, preamble, history, model, cfg):
+def _chat_gemini(prompt, preamble, history, model, cfg, max_tokens=None):
     """Google Gemini (Generative Language API)."""
     if not cfg.get('api_key'):
         raise ValueError("Informe a API Key do Google AI Studio.")
@@ -353,13 +356,13 @@ def _chat_gemini(prompt, preamble, history, model, cfg):
         timeout=TIMEOUT,
         json={"system_instruction": {"parts": [{"text": preamble}]},
               "contents": contents,
-              "generationConfig": {"maxOutputTokens": MAX_TOKENS, "temperature": TEMPERATURA}})
+              "generationConfig": {"maxOutputTokens": (max_tokens or MAX_TOKENS), "temperature": TEMPERATURA}})
     if r.status_code != 200:
         raise RuntimeError(f"HTTP {r.status_code}: {r.text[:200]}")
     return r.json()['candidates'][0]['content']['parts'][0]['text']
 
 
-def _chat_anthropic(prompt, preamble, history, model, cfg):
+def _chat_anthropic(prompt, preamble, history, model, cfg, max_tokens=None):
     """Anthropic (Claude) — Messages API."""
     if not cfg.get('api_key'):
         raise ValueError("Informe a API Key da Anthropic.")
@@ -374,7 +377,7 @@ def _chat_anthropic(prompt, preamble, history, model, cfg):
                                "anthropic-version": "2023-06-01"},
                       timeout=TIMEOUT,
                       json={"model": model, "system": preamble, "messages": messages,
-                            "max_tokens": MAX_TOKENS, "temperature": TEMPERATURA})
+                            "max_tokens": (max_tokens or MAX_TOKENS), "temperature": TEMPERATURA})
     if r.status_code != 200:
         raise RuntimeError(f"HTTP {r.status_code}: {r.text[:200]}")
     return r.json()['content'][0]['text']
