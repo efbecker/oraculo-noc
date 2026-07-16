@@ -7,6 +7,7 @@ from app.routes.auth import login_required
 from app.services.ai_engine import process_oraculo_message
 from app import db
 from app.services import branding
+from app.services import secops_render
 
 bp = Blueprint('chat', __name__)
 
@@ -204,20 +205,11 @@ def download_report(scan_id):
 
         target = row['target']
         ai_text = json.loads(row['result_json']).get("ai_analysis", "")
-        
-        # Transforma cada CVE-xxxx-xxxx em link clicável para o NVD (cor ajustada
-        # pro tema escuro — o vermelho escuro original ficava ilegível no fundo dark).
-        ai_text = re.sub(
-            r'\bCVE-\d{4}-\d{4,7}\b',
-            lambda m: f'<a href="https://nvd.nist.gov/vuln/detail/{m.group(0)}" target="_blank" style="color:#ff6b6b; font-weight:bold;">{m.group(0)}</a>',
-            ai_text
-        )
-        html_content = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', ai_text)
-        html_content = re.sub(r'### (.*?)\n', r'<h3>\1</h3>\n', html_content)
-        html_content = re.sub(r'## (.*?)\n', r'<h2>\1</h2>\n', html_content)
-        html_content = re.sub(r'# (.*?)\n', r'<h1>\1</h1>\n', html_content)
-        html_content = re.sub(r'\[(.*?)\]\((.*?)\)', r'<a href="\2" target="_blank">\1</a>', html_content)
-        html_content = html_content.replace('\n', '<br>')
+
+        # Renderização Markdown → HTML de verdade (listas aninhadas, selos de
+        # severidade, coloração de CVSS e links dos CVEs para o NVD). O conversor
+        # antigo não tratava listas: os marcadores vazavam como asteriscos.
+        html_content = secops_render.render_report_html(ai_text)
         
         # Mesmo tema escuro do relatório de VMs/FinOps (mesmas cores/classes),
         # pra manter os dois relatórios visualmente consistentes.
@@ -236,6 +228,7 @@ def download_report(scan_id):
             .content-box a {{ color:#00e676; font-weight:bold; text-decoration:none; }}
             .content-box a:hover {{ text-decoration:underline; }}
             .footer-note {{ text-align:center; font-size:0.8em; color:#666; margin-top:35px; }}
+            {secops_render.REPORT_EXTRA_CSS}
         </style>
         </head><body><div class="container">
         {branding.get_logo_html()}
