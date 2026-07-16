@@ -76,6 +76,25 @@ def extract_cves(scan_data):
         return (-(float(sc) if sc else -1.0), _cve)
     return sorted(encontrados.items(), key=_sev)
 
+def _severidade_cvss(score):
+    """Traduz um score CVSS numérico na faixa de severidade textual (padrão
+    CVSS v3: 0.1-3.9 Baixa, 4.0-6.9 Média, 7.0-8.9 Alta, 9.0-10.0 Crítica).
+    Sem score (None), devolve 'Indeterminada' — comum quando o script do Nmap
+    reporta a CVE mas não o vetor completo."""
+    try:
+        s = float(score)
+    except (TypeError, ValueError):
+        return "Indeterminada"
+    if s >= 9.0:
+        return "Crítica"
+    if s >= 7.0:
+        return "Alta"
+    if s >= 4.0:
+        return "Média"
+    if s > 0.0:
+        return "Baixa"
+    return "Informativa"
+
 def update_scan_progress(scan_id, progress, stage, status="running", result_json=None):
     try:
         if result_json is not None:
@@ -216,32 +235,57 @@ def start_scan_thread(target, username, session_id=None):
                     lista_cves = ", ".join(cve for cve, _ in cves) if cves else "nenhuma CVE explícita identificada"
 
                     prompt = (
-                        f"Você é um consultor de segurança ofensiva sênior (OSCP/Red Team) redigindo um "
-                        f"relatório executivo formal para a diretoria e para a equipe técnica de um cliente "
-                        f"corporativo. Idioma: Português do Brasil. Formato: Markdown, tom profissional, "
-                        f"objetivo e sem sensacionalismo.\n\n"
+                        f"Você é um consultor de segurança ofensiva sênior (OSCP/OSEP/Red Team) redigindo um "
+                        f"relatório técnico-executivo formal para a diretoria e para a equipe técnica de um "
+                        f"cliente corporativo. Idioma: Português do Brasil. Formato: Markdown, tom profissional, "
+                        f"objetivo e sem sensacionalismo. Seja DETALHISTA e substancial: prefira uma análise rica "
+                        f"e aprofundada a um laudo enxuto — este relatório será entregue ao cliente como documento "
+                        f"final.\n\n"
                         f"ALVO AUDITADO: {target}\n"
                         f"CVEs DETECTADAS PELO SCANNER (use APENAS estas, não invente outras): {lista_cves}\n\n"
-                        f"Estruture EXATAMENTE nesta ordem, usando cabeçalhos '##':\n"
+                        f"Estruture EXATAMENTE nesta ordem, usando cabeçalhos '##':\n\n"
                         f"## 1. Sumário Executivo\n"
-                        f"- Classifique o risco geral do alvo como CRÍTICO, ALTO, MÉDIO ou BAIXO e justifique "
-                        f"em 2-3 frases voltadas ao impacto de negócio (exposição, continuidade, dados).\n"
+                        f"- Abra com a linha **Risco Geral:** seguida de CRÍTICO, ALTO, MÉDIO ou BAIXO.\n"
+                        f"- Escreva 3-5 frases de contexto voltadas ao IMPACTO DE NEGÓCIO (exposição, continuidade "
+                        f"operacional, confidencialidade de dados, conformidade/LGPD quando fizer sentido).\n"
+                        f"- Inclua um bullet **Principais Achados:** com 2-4 pontos-chave resumidos.\n"
+                        f"- Inclua um bullet **Postura de Segurança:** com uma leitura honesta do que já está bem "
+                        f"configurado no alvo (ex.: redirecionamento HTTP→HTTPS, ausência de serviços legados).\n\n"
                         f"## 2. Superfície de Ataque\n"
-                        f"- Liste em bullets cada porta/serviço/versão exposto e o que ele representa em risco.\n"
+                        f"- Para CADA porta/serviço aberto, crie um bullet de nível 1 no formato "
+                        f"**Porta X/tcp (SERVIÇO)** e, abaixo dele, sub-bullets recuados com: **Versão** detectada, "
+                        f"**Função** do serviço, **Exposição** (interna/externa e o que um atacante enxerga), e "
+                        f"**Risco** associado com justificativa técnica.\n"
+                        f"- Comente banners, títulos HTTP, certificados e cabeçalhos relevantes quando presentes nos dados.\n\n"
                         f"## 3. Análise de Vulnerabilidades\n"
-                        f"- Para cada CVE relevante: cite o identificador em TEXTO PURO (ex.: CVE-2011-3192, "
-                        f"sem criar hyperlink), a severidade/CVSS quando houver, uma descrição técnica curta, "
-                        f"o vetor de exploração e o impacto potencial.\n"
+                        f"- Para CADA CVE relevante crie um bullet **CVE-AAAA-NNNN** (identificador em TEXTO PURO, "
+                        f"NÃO crie hyperlink) e, recuados abaixo, sub-bullets com: **Severidade** (Crítica/Alta/Média/"
+                        f"Baixa) e **CVSS** quando houver; **Descrição** técnica; **Vetor de Exploração** (como seria "
+                        f"abusada na prática); **Impacto Potencial** ao negócio; e **Evidência** observada no scan.\n"
+                        f"- Se NENHUMA CVE foi identificada, NÃO deixe a seção vazia: explique o que foi testado "
+                        f"(CSRF, XSS refletido/armazenado/DOM, injeções comuns), reforce que ausência de CVE não é "
+                        f"ausência de risco, e liste hipóteses de vulnerabilidades de camada de aplicação (L7) que um "
+                        f"scanner automático não detecta e exigiriam teste manual/autenticado.\n\n"
                         f"## 4. Plano de Remediação Priorizado\n"
-                        f"- Ações concretas em ordem de prioridade, com esforço estimado (Baixo/Médio/Alto) e "
-                        f"prazo sugerido (Imediato / 30 dias / 90 dias).\n"
-                        f"## 5. Observações e Limitações\n"
-                        f"- Ressalvas do scan (ex.: detecção sem autenticação, possíveis falsos positivos).\n\n"
-                        f"REGRAS: não use tabelas Markdown (use listas com marcadores e rótulos em **negrito**). "
-                        f"Não invente CVEs fora da lista fornecida. Seja técnico e direto.\n\n"
+                        f"- Liste ações concretas em ordem de prioridade. Cada ação é um bullet de nível 1 com "
+                        f"sub-bullets: **Prioridade** (P1/P2/P3), **Esforço** (Baixo/Médio/Alto), **Prazo** "
+                        f"(Imediato / 30 dias / 90 dias) e **Benefício** esperado.\n"
+                        f"- Inclua pelo menos hardening de cabeçalhos HTTP de segurança (HSTS, CSP, X-Frame-Options), "
+                        f"gestão de versões/patch, TLS e monitoramento contínuo, mesmo em cenário de risco baixo.\n\n"
+                        f"## 5. Recomendações Estratégicas\n"
+                        f"- 3-5 recomendações de médio/longo prazo para elevar a maturidade de segurança "
+                        f"(ex.: WAF, testes de intrusão periódicos, pipeline de varredura contínua, threat intel).\n\n"
+                        f"## 6. Observações e Limitações\n"
+                        f"- Ressalvas do scan (detecção sem autenticação, possíveis falsos positivos/negativos, "
+                        f"escopo limitado à superfície exposta, recomendação de pentest manual como complemento).\n\n"
+                        f"REGRAS: não use tabelas Markdown (use listas com marcadores '- ' e sub-listas recuadas com "
+                        f"4 espaços; rótulos em **negrito**). Não invente CVEs fora da lista fornecida. Não invente "
+                        f"portas/serviços que não estejam nos dados brutos. Seja técnico, direto e rico em detalhes.\n\n"
                         f"DADOS BRUTOS DO NMAP (JSON): {json.dumps(scan_data)}"
                     )
-                    ai_analysis = exec_chat_with_oracle(prompt, username)
+                    # Teto de tokens elevado SÓ para o laudo (o padrão de 2048 truncava o
+                    # relatório no meio da seção 4, fazendo sumir remediação/observações).
+                    ai_analysis = exec_chat_with_oracle(prompt, username, max_tokens=4096)
 
                     # Bloco de referências construído pelo código: garante que as CVEs
                     # apareçam mesmo que a IA esqueça alguma. Os IDs em texto puro são
@@ -249,10 +293,17 @@ def start_scan_thread(target, username, session_id=None):
                     report_md = ai_analysis
                     if cves:
                         linhas = "\n".join(
-                            f"- {cve}" + (f"  —  CVSS {score}" if score else "")
+                            f"- **{cve}** — Severidade {_severidade_cvss(score)}"
+                            + (f" (CVSS {score})" if score else " (CVSS não informado)")
+                            + " — detalhes técnicos no NVD."
                             for cve, score in cves
                         )
-                        report_md += f"\n\n## 6. Referências (CVEs Identificadas)\n{linhas}"
+                        report_md += (
+                            "\n\n## 7. Referências (CVEs Identificadas)\n"
+                            "As CVEs abaixo são convertidas em links clicáveis para o NVD (National "
+                            "Vulnerability Database) no relatório e no chat:\n"
+                            f"{linhas}"
+                        )
 
                     resultado_final = f"🛡️ **Nmap scan report para {target}:**\n\n{report_md}\n\n[BOTÃO_DOWNLOAD:{scan_id}]"
                     result_payload = {"scan_data": scan_data, "ai_analysis": report_md}
