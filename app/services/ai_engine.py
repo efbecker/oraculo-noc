@@ -71,7 +71,7 @@ def obter_contexto_zabbix_real_time(token, grupo, url=None):
     except Exception as e: 
         return f"ERRO_ZABBIX: {str(e)}"
 
-def exec_chat_with_oracle(prompt, username="admin", context="", chat_history_rows=None):
+def exec_chat_with_oracle(prompt, username="admin", context="", chat_history_rows=None, max_tokens=None):
     """Envia a pergunta para a IA configurada NO PAINEL (Admin > Inteligência
     Artificial) — pode ser OpenAI, Gemini, Anthropic ou qualquer endpoint
     compatível (Groq, DeepSeek, Ollama local...).
@@ -98,7 +98,7 @@ def exec_chat_with_oracle(prompt, username="admin", context="", chat_history_row
             history.append((role, row['content']))
 
     try:
-        return ai_providers.chat(prompt, preamble, history, cfg=cfg)
+        return ai_providers.chat(prompt, preamble, history, cfg=cfg, max_tokens=max_tokens)
 
     except ai_providers.IANaoConfiguradaError as e:
         # NÃO é falha técnica: é configuração faltando. O cliente não tem culpa
