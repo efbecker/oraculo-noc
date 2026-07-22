@@ -33,11 +33,12 @@ def create_app():
     backup_manager.start_scheduler()
 
     # REGISTRO DOS BLUEPRINTS (A MÁGICA ACONTECE AQUI) ===
-    from app.routes import auth, chat, admin, logs_admin
+    from app.routes import auth, chat, admin, logs_admin, veeam_admin
     app.register_blueprint(auth.bp)
     app.register_blueprint(chat.bp)
     app.register_blueprint(admin.bp)
     app.register_blueprint(logs_admin.bp)
+    app.register_blueprint(veeam_admin.bp)
 
     # ---- Páginas de erro ----------------------------------------------------
     # URL inexistente (ex.: /adm, /painel, um link velho): se a pessoa NÃO está
