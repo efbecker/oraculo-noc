@@ -3,7 +3,7 @@ import secrets
 from werkzeug.security import generate_password_hash
 from flask import Blueprint, request, redirect, url_for, session, render_template_string, jsonify, send_file
 from app import db
-from app.services import backup_manager, branding, ai_providers
+from app.services import backup_manager, branding, ai_providers, veeam
 from app.routes.auth import admin_required
 
 bp = Blueprint('admin', __name__)
@@ -131,6 +131,7 @@ HTML_TEMPLATE = r"""
                 <a href="#ia" class="nav-item" data-tab="ia">🧠 Inteligência Artificial</a>
                 <a href="#branding" class="nav-item" data-tab="branding">🖼️ Branding</a>
                 <a href="#backup" class="nav-item" data-tab="backup">💾 Backup</a>
+                <a href="#veeam" class="nav-item" data-tab="veeam">🛡️ Veeam</a>
                 <a href="#logs" class="nav-item" data-tab="logs">📜 Logs</a>
             </nav>
             <div class="sidebar-footer">
@@ -486,6 +487,95 @@ HTML_TEMPLATE = r"""
         </div>
         </section>
 
+        <section id="tab-veeam" class="admin-tab">
+        <h2 class="content-title">🛡️ Veeam (Backup)</h2>
+        <div class="form-container">
+            <p style="font-size:13px; color:#aaa; margin-top:-10px;">
+                Conexão com o <strong>Veeam Backup Enterprise Manager</strong> (somente leitura).
+                Com isso, cada cliente passa a ver o status dos seus backups no chat
+                — basta perguntar por <em>"backup"</em>, <em>"meu backup rodou?"</em> ou pedir um
+                <em>"relatório de backup"</em>.
+            </p>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>URL da API</label>
+                    <input type="text" id="veeam-url" placeholder="https://host:9398/api" value="{{ veeam_cfg.url }}">
+                </div>
+                <div class="form-group">
+                    <label>Usuário</label>
+                    <input type="text" id="veeam-user" placeholder="DOMINIO\\usuario" value="{{ veeam_cfg.user }}">
+                </div>
+                <div class="form-group">
+                    <label>Senha</label>
+                    <input type="password" id="veeam-password" placeholder="{{ 'Já salva — deixe em branco p/ manter' if veeam_cfg.password else 'Senha do usuário do EM' }}">
+                </div>
+                <div class="form-group">
+                    <label>Certificado TLS</label>
+                    <div class="checkbox-row" style="margin-top:8px;">
+                        <input type="checkbox" id="veeam-verify" {{ 'checked' if veeam_cfg.verify_tls else '' }}>
+                        <span style="font-size:13px; color:#aaa;">Verificar certificado (desmarque p/ cert interno/self-signed)</span>
+                    </div>
+                </div>
+            </div>
+            <div class="row-inline">
+                <button type="button" class="btn-secondary" onclick="testarVeeam()">🔌 Testar Conexão</button>
+                <button type="button" class="btn-submit" onclick="aplicarVeeam()">💾 Salvar e Aplicar</button>
+            </div>
+            <div id="veeam-status-msg" class="status-msg"></div>
+        </div>
+
+        <h2 class="content-title" style="margin-top:35px;">👥 Mapeamento por Cliente</h2>
+        <div class="card">
+            <p class="field-hint">
+                Como um único Veeam atende vários clientes, cada <strong>grupo de cliente</strong> só pode ver os
+                SEUS jobs. No ambiente da Armazém todo job é nomeado <code>CLIENTE_...</code>, então o padrão é o
+                <strong>prefixo</strong> do nome (ex.: grupo <code>SUPREMA</code> → prefixo <code>SUPREMA</code>).
+                Alternativamente, use o <strong>tenant</strong> (organização vCloud Director).
+                <br><em>Se um grupo não tiver mapa aqui, o Oráculo assume prefixo = nome do próprio grupo.</em>
+            </p>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>Grupo do Cliente</label>
+                    <input type="text" id="veeam-map-grupo" placeholder="Ex.: SUPREMA (igual ao grupo_cliente)">
+                </div>
+                <div class="form-group">
+                    <label>Casar por</label>
+                    <select id="veeam-map-mode">
+                        <option value="prefix">Prefixo do nome do job</option>
+                        <option value="tenant">Tenant (organização vCD)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Valor</label>
+                    <input type="text" id="veeam-map-value" placeholder="Ex.: SUPREMA">
+                </div>
+            </div>
+            <div class="row-inline">
+                <button type="button" class="btn-submit" onclick="salvarVeeamMap()">💾 Salvar Mapeamento</button>
+            </div>
+            <div id="veeam-map-status-msg" class="status-msg"></div>
+
+            <table class="data-table" style="margin-top:20px;">
+                <thead><tr><th>GRUPO</th><th>CASAR POR</th><th>VALOR</th><th>AÇÕES</th></tr></thead>
+                <tbody>
+                {% for grupo, m in veeam_map.items() %}
+                    <tr>
+                        <td><strong>{{ grupo }}</strong></td>
+                        <td>{{ 'Tenant vCD' if m.mode == 'tenant' else 'Prefixo do job' }}</td>
+                        <td><span style="font-family:monospace; color:#00e5ff;">{{ m.value }}</span></td>
+                        <td>
+                            <button type="button" class="btn-edit" onclick="editarVeeamMap('{{ grupo }}', '{{ m.mode }}', '{{ m.value }}')">Editar</button>
+                            <button type="button" class="btn-delete" onclick="excluirVeeamMap('{{ grupo }}')">Excluir</button>
+                        </td>
+                    </tr>
+                {% else %}
+                    <tr><td colspan="4" style="color:#666;">Nenhum mapeamento — cada grupo usa o próprio nome como prefixo.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        </section>
+
         <section id="tab-logs" class="admin-tab">
         <h2 class="content-title">📜 Logs do Sistema</h2>
         <div class="form-container">
@@ -709,6 +799,62 @@ HTML_TEMPLATE = r"""
             } catch (e) { mostrarStatus('ia-status-msg', false, 'Erro de comunicação: ' + e); }
         }
         toggleIaFields();
+
+        // ================== Veeam (Backup) ==================
+        function coletarVeeamForm() {
+            return {
+                url: document.getElementById('veeam-url').value.trim(),
+                user: document.getElementById('veeam-user').value.trim(),
+                password: document.getElementById('veeam-password').value.trim(),  // em branco = manter a salva
+                verify_tls: document.getElementById('veeam-verify').checked
+            };
+        }
+        async function testarVeeam() {
+            mostrarStatus('veeam-status-msg', true, '🔄 Conectando ao Veeam Enterprise Manager...');
+            try {
+                const r = await fetch('/admin/veeam/test', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(coletarVeeamForm()) });
+                const data = await r.json();
+                mostrarStatus('veeam-status-msg', data.ok, data.message);
+            } catch (e) { mostrarStatus('veeam-status-msg', false, 'Erro de comunicação: ' + e); }
+        }
+        async function aplicarVeeam() {
+            mostrarStatus('veeam-status-msg', true, '🔄 Testando e aplicando...');
+            try {
+                const r = await fetch('/admin/veeam/apply', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(coletarVeeamForm()) });
+                const data = await r.json();
+                mostrarStatus('veeam-status-msg', data.ok, data.message);
+                if (data.ok) setTimeout(() => window.location.reload(), 1500);
+            } catch (e) { mostrarStatus('veeam-status-msg', false, 'Erro de comunicação: ' + e); }
+        }
+        function editarVeeamMap(grupo, mode, value) {
+            document.getElementById('veeam-map-grupo').value = grupo;
+            document.getElementById('veeam-map-mode').value = mode;
+            document.getElementById('veeam-map-value').value = value;
+            document.getElementById('veeam-map-grupo').scrollIntoView({behavior:'smooth', block:'center'});
+        }
+        async function salvarVeeamMap() {
+            const body = {
+                grupo: document.getElementById('veeam-map-grupo').value.trim(),
+                mode: document.getElementById('veeam-map-mode').value,
+                value: document.getElementById('veeam-map-value').value.trim()
+            };
+            mostrarStatus('veeam-map-status-msg', true, '🔄 Salvando...');
+            try {
+                const r = await fetch('/admin/veeam/map/save', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+                const data = await r.json();
+                mostrarStatus('veeam-map-status-msg', data.ok, data.message);
+                if (data.ok) setTimeout(() => window.location.reload(), 1000);
+            } catch (e) { mostrarStatus('veeam-map-status-msg', false, 'Erro de comunicação: ' + e); }
+        }
+        async function excluirVeeamMap(grupo) {
+            if (!confirm('Remover o mapeamento do grupo ' + grupo + '?')) return;
+            try {
+                const r = await fetch('/admin/veeam/map/delete', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({grupo: grupo}) });
+                const data = await r.json();
+                if (data.ok) window.location.reload();
+            } catch (e) { mostrarStatus('veeam-map-status-msg', false, 'Erro de comunicação: ' + e); }
+        }
+
         // ---------- Perfis de IA por cliente ----------
         function togglePerfilFields() {
             const p = document.getElementById('perfil-provider').value;
@@ -955,6 +1101,8 @@ def index():
         backup_cfg=backup_manager.load_config(),
         backups=backup_manager.historico(),
         logo=branding.logo_info(),
+        veeam_cfg=veeam.current_config(),       # senha já vem MASCARADA
+        veeam_map=veeam.list_client_maps(),
     )
 
 
