@@ -15,6 +15,7 @@ from app.services.zabbix import (
 )
 from app.services.anomalias import detectar_anomalias_zabbix
 from app.services.capacidade import prever_capacidade_zabbix
+from app.services import veeam
 
 # ==========================================
 # CONFIGURAÇÃO DO SISTEMA DE LOGS / AUDITORIA
@@ -67,7 +68,20 @@ def obter_contexto_zabbix_real_time(token, grupo, url=None):
         if incidentes and "Erro na coleta" in incidentes:
             return f"ERRO_ZABBIX: {incidentes}"
             
-        return f"\n--- ESTADO ATUAL DA INFRAESTRUTURA ---\n{status}\n{incidentes}"
+        contexto = f"\n--- ESTADO ATUAL DA INFRAESTRUTURA ---\n{status}\n{incidentes}"
+
+        # Anexa o estado do BACKUP (Veeam) ao contexto, quando configurado. Assim
+        # perguntas soltas ("meu ambiente está seguro?") passam a considerar
+        # servidor E backup numa resposta só. Silencioso se o Veeam não estiver
+        # configurado — quem só usa Zabbix não é afetado.
+        try:
+            resumo_bkp = veeam.resumo_backup_para_ia(grupo)
+            if resumo_bkp:
+                contexto += resumo_bkp
+        except Exception:
+            pass  # backup é complemento: nunca derruba o contexto do Zabbix
+
+        return contexto
     except Exception as e: 
         return f"ERRO_ZABBIX: {str(e)}"
 
@@ -180,6 +194,44 @@ def process_oraculo_message(message, username, token_zabbix, grupo_cliente, hist
                  f"de discos, CPU, memória e interfaces de rede com base nos últimos {dias} dias.\n\n"
                  "*Assim que terminar, o resultado aparecerá automaticamente aqui no chat.*")
         return {"reply": intro, "action": "scan", "target": label, "scan_id": job_id, "stage": REPORT_FIRST_STAGE, "is_html": 0}
+
+    # ======================================================================
+    # BACKUP (Veeam) — vem ANTES do bloco de relatório de propósito: "relatório
+    # de backup" contém 'relatorio' e, sem isto, cairia no FinOps. Só dispara se
+    # a mensagem fala de backup/veeam explicitamente.
+    # ======================================================================
+    if any(p in msg_l for p in ['backup', 'veeam', 'ponto de restaura', 'restore point',
+                                 'cópia de segurança', 'copia de seguranca', 'job de backup',
+                                 'última cópia', 'ultima copia', 'backup rodou', 'backup falhou',
+                                 'falha de backup', 'falha no backup']):
+        # Pedido de RELATÓRIO/dashboard -> HTML em background (barra de progresso,
+        # igual ao FinOps). Pergunta de status -> resposta rápida inline.
+        quer_relatorio = any(p in msg_l for p in ['relatorio', 'relatório', 'report', 'dashboard'])
+
+        logger.info(f"[Backup] Usuário '{username}' consultou o Veeam (relatório={quer_relatorio}).")
+
+        if not veeam.is_configured():
+            return {"reply": ("💾 **Módulo de backup (Veeam) ainda não configurado.**\n\n"
+                              "*Peça ao administrador para configurar a conexão em "
+                              "**Admin → Veeam**.*"), "is_html": 0}
+
+        if quer_relatorio:
+            label = f"Backup Veeam ({grupo_cliente or 'GLOBAL'})"
+
+            def _gerar():
+                return veeam.gerar_relatorio_backup_html(grupo_cliente)
+
+            job_id = start_report_job(username, label, _gerar, session_id=session_id)
+            if not job_id:
+                return {"reply": "⚠️ Não foi possível iniciar o relatório de backup. Tente novamente.", "is_html": 0}
+            intro = ("💾 **Relatório de backup em processamento!**\nEstou consultando o Veeam Enterprise "
+                     "Manager e montando o dashboard do seu ambiente.\n\n"
+                     "*Assim que terminar, o relatório aparece automaticamente aqui no chat.*")
+            return {"reply": intro, "action": "scan", "target": label, "scan_id": job_id,
+                    "stage": REPORT_FIRST_STAGE, "is_html": 0}
+
+        # Status rápido (uma coleta cacheada; responde na hora).
+        return {"reply": veeam.status_backup_texto(grupo_cliente), "is_html": 0}
 
     if any(p in msg_l for p in ['grafico', 'gráfico', 'consumo', 'relatorio', 'relatório']):
         dias = 1.0
