@@ -3,7 +3,7 @@ import secrets
 from werkzeug.security import generate_password_hash
 from flask import Blueprint, request, redirect, url_for, session, render_template_string, jsonify, send_file
 from app import db
-from app.services import backup_manager, branding, ai_providers, veeam
+from app.services import backup_manager, branding, ai_providers, veeam, report_store
 from app.routes.auth import admin_required
 
 bp = Blueprint('admin', __name__)
@@ -132,6 +132,7 @@ HTML_TEMPLATE = r"""
                 <a href="#branding" class="nav-item" data-tab="branding">🖼️ Branding</a>
                 <a href="#backup" class="nav-item" data-tab="backup">💾 Backup</a>
                 <a href="#veeam" class="nav-item" data-tab="veeam">🛡️ Veeam</a>
+                <a href="#relatorios" class="nav-item" data-tab="relatorios">📊 Relatórios</a>
                 <a href="#logs" class="nav-item" data-tab="logs">📜 Logs</a>
             </nav>
             <div class="sidebar-footer">
@@ -576,6 +577,33 @@ HTML_TEMPLATE = r"""
         </div>
         </section>
 
+        <section id="tab-relatorios" class="admin-tab">
+        <h2 class="content-title">📊 Relatórios Gerados</h2>
+        <div class="form-container">
+            <p class="field-hint">
+                Todos os relatórios gerados no Oráculo — <strong>FinOps/Consumo</strong> e
+                <strong>SecOps</strong> — num só lugar. Os arquivos ficam em área privada e
+                só abrem por link autenticado. A retenção é automática (padrão: 30 dias).
+            </p>
+            <div class="row-inline">
+                <input type="text" id="rel-filter-input" class="search-box" placeholder="Filtrar (título, usuário, grupo, tipo)">
+                <button type="button" class="btn-submit" onclick="carregarRelatorios()">🔄 Atualizar</button>
+                <span id="rel-count" class="field-hint" style="margin:0;"></span>
+            </div>
+            <div style="overflow-x:auto; margin-top:15px;">
+                <table id="rel-table">
+                    <thead><tr>
+                        <th>Tipo</th><th>Título</th><th>Gerado por</th><th>Grupo</th>
+                        <th>Data</th><th>Tamanho</th><th>Ações</th>
+                    </tr></thead>
+                    <tbody id="rel-tbody">
+                        <tr><td colspan="7" style="color:#667;">Selecione a aba para carregar…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        </section>
+
         <section id="tab-logs" class="admin-tab">
         <h2 class="content-title">📜 Logs do Sistema</h2>
         <div class="form-container">
@@ -610,11 +638,83 @@ HTML_TEMPLATE = r"""
             if (navEl) navEl.classList.add('active');
             history.replaceState(null, '', '#' + alvo);
             if (alvo === 'usuarios') carregarUsuarios(1);
+            if (alvo === 'relatorios') carregarRelatorios();
             if (alvo === 'logs') { entrarAbaLogs(); } else { pararAutoRefreshLogs(); }
         }
         document.querySelectorAll('.nav-item[data-tab]').forEach(el => {
             el.addEventListener('click', (ev) => { ev.preventDefault(); mostrarAba(el.dataset.tab); });
         });
+
+        // ================== Relatórios (FinOps + SecOps) ==================
+        let _relCache = [];
+        function _escHtml(s) {
+            return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
+                {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]
+            ));
+        }
+        function _fmtTamanho(b) {
+            b = Number(b) || 0;
+            if (b <= 0) return '—';
+            if (b >= 1048576) return (b/1048576).toFixed(1) + ' MB';
+            if (b >= 1024) return (b/1024).toFixed(0) + ' KB';
+            return b + ' B';
+        }
+        async function carregarRelatorios() {
+            const tbody = document.getElementById('rel-tbody');
+            tbody.innerHTML = '<tr><td colspan="7" style="color:#667;">Carregando…</td></tr>';
+            try {
+                const r = await fetch('/admin/reports/list');
+                const data = await r.json();
+                _relCache = (data && data.reports) ? data.reports : [];
+                renderRelatorios();
+            } catch (e) {
+                tbody.innerHTML = '<tr><td colspan="7" style="color:#ff6b6b;">Falha ao carregar relatórios.</td></tr>';
+            }
+        }
+        function renderRelatorios() {
+            const filtro = (document.getElementById('rel-filter-input').value || '').toLowerCase();
+            const tbody = document.getElementById('rel-tbody');
+            const lista = _relCache.filter(x => !filtro || (
+                (x.titulo||'') + ' ' + (x.criado_por||'') + ' ' + (x.grupo_cliente||'') + ' ' + (x.tipo||'')
+            ).toLowerCase().includes(filtro));
+            document.getElementById('rel-count').textContent =
+                lista.length + ' de ' + _relCache.length + ' relatório(s)';
+            if (!lista.length) {
+                tbody.innerHTML = '<tr><td colspan="7" style="color:#667;">Nenhum relatório encontrado.</td></tr>';
+                return;
+            }
+            tbody.innerHTML = lista.map(x => {
+                const secops = (x.tipo === 'secops');
+                const selo = secops
+                    ? '<span class="badge-status error" style="background:rgba(255,158,0,0.15);color:#ff9e00;">🛡️ SecOps</span>'
+                    : '<span class="badge-status ok" style="background:rgba(0,229,255,0.15);color:#00e5ff;">📊 FinOps</span>';
+                return '<tr>'
+                    + '<td>' + selo + '</td>'
+                    + '<td>' + _escHtml(x.titulo) + '</td>'
+                    + '<td>' + _escHtml(x.criado_por || '—') + '</td>'
+                    + '<td>' + _escHtml(x.grupo_cliente || '—') + '</td>'
+                    + '<td style="white-space:nowrap;">' + _escHtml(x.criado_em || '—') + '</td>'
+                    + '<td style="white-space:nowrap;">' + _fmtTamanho(x.tamanho) + '</td>'
+                    + '<td><div class="actions-cell">'
+                    + '<a class="btn-edit" href="' + _escHtml(x.url) + '" target="_blank" rel="noopener">Abrir</a>'
+                    + '<button class="btn-danger" onclick="excluirRelatorio(\'' + _escHtml(x.id) + '\')">Excluir</button>'
+                    + '</div></td>'
+                    + '</tr>';
+            }).join('');
+        }
+        document.getElementById('rel-filter-input').addEventListener('input', renderRelatorios);
+        async function excluirRelatorio(id) {
+            if (!confirm('Remover este relatório do painel? O arquivo será apagado (o SecOps continua no histórico do chat).')) return;
+            try {
+                const r = await fetch('/admin/reports/delete', {
+                    method: 'POST', headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({ id: id })
+                });
+                const data = await r.json();
+                if (data && data.ok) { carregarRelatorios(); }
+                else { alert('Não foi possível remover: ' + ((data && data.error) || 'erro')); }
+            } catch (e) { alert('Falha na remoção.'); }
+        }
 
         // ================== Usuários: busca + paginação (escala para milhares) ==================
         let usersPaginaAtual = 1;
@@ -1104,6 +1204,26 @@ def index():
         veeam_cfg=veeam.current_config(),       # senha já vem MASCARADA
         veeam_map=veeam.list_client_maps(),
     )
+
+
+@bp.route('/admin/reports/list', methods=['GET'])
+def reports_list():
+    """Índice unificado de relatórios (FinOps + SecOps) para o painel Admin."""
+    guard = _admin_only_json()
+    if guard: return guard
+    return jsonify({"ok": True, "reports": report_store.listar_todos(limite=300)})
+
+
+@bp.route('/admin/reports/delete', methods=['POST'])
+def reports_delete():
+    """Remove um relatório do índice (e o arquivo em disco, se FinOps)."""
+    guard = _admin_only_json()
+    if guard: return guard
+    rid = (request.json or {}).get('id', '')
+    if not rid:
+        return jsonify({"ok": False, "error": "id ausente."}), 400
+    ok = report_store.remover(rid)
+    return jsonify({"ok": bool(ok)})
 
 
 @bp.route('/admin/users/list', methods=['GET'])
