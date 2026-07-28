@@ -26,8 +26,17 @@ INSTANCE_DIR = os.path.join(BASE_DIR, 'instance')
 AI_CONFIG_FILE = os.path.join(INSTANCE_DIR, 'ai_config.json')
 
 TIMEOUT = 90       # segundos por chamada de IA
-MAX_TOKENS = 2048  # teto de tokens por resposta
+MAX_TOKENS = 4096  # teto de tokens por resposta (era 2048: cortava análises longas)
 TEMPERATURA = 0.3  # mesma temperatura usada hoje
+
+# Anti-"resposta pela metade": se o modelo parar por atingir o teto de tokens,
+# pedimos a ele que CONTINUE de onde parou e concatenamos — até algumas vezes,
+# com um limite de segurança para não sair caro/infinito.
+MAX_CONTINUACOES = 3
+CONTINUE_PROMPT = (
+    "Continue a resposta EXATAMENTE de onde parou, sem repetir nada do que já "
+    "escreveu e sem reintroduzir. Emende diretamente na última palavra."
+)
 
 PROVIDER_LABELS = {
     'openai': 'OpenAI (GPT)',
@@ -299,13 +308,31 @@ def chat(prompt, preamble, history, modelo_usuario=None, cfg=None, max_tokens=No
 
     model = (cfg.get('model') or '').strip() or MODELO_PADRAO.get(provider, '')
 
-    if provider in ('openai', 'openai_compat'):
-        return _chat_openai(prompt, preamble, history, model, cfg, max_tokens)
-    if provider == 'gemini':
-        return _chat_gemini(prompt, preamble, history, model, cfg, max_tokens)
-    if provider == 'anthropic':
-        return _chat_anthropic(prompt, preamble, history, model, cfg, max_tokens)
-    raise IANaoConfiguradaError(f"Provedor de IA desconhecido: {provider}")
+    def _despachar(hist, prm):
+        """Uma chamada ao provedor certo. Devolve (texto, truncado)."""
+        if provider in ('openai', 'openai_compat'):
+            return _chat_openai(prm, preamble, hist, model, cfg, max_tokens)
+        if provider == 'gemini':
+            return _chat_gemini(prm, preamble, hist, model, cfg, max_tokens)
+        if provider == 'anthropic':
+            return _chat_anthropic(prm, preamble, hist, model, cfg, max_tokens)
+        raise IANaoConfiguradaError(f"Provedor de IA desconhecido: {provider}")
+
+    # Primeira resposta. Se o modelo cortou por atingir o teto de tokens,
+    # continuamos automaticamente de onde parou — assim a resposta nunca fica
+    # pela metade. Respostas curtas (o caso comum) não pagam nada por isso:
+    # o laço só roda quando 'truncado' é verdadeiro.
+    texto, truncado = _despachar(history, prompt)
+    total = texto or ""
+    continuacoes = 0
+    while truncado and continuacoes < MAX_CONTINUACOES:
+        continuacoes += 1
+        hist_cont = list(history) + [('user', prompt), ('assistant', total)]
+        parte, truncado = _despachar(hist_cont, CONTINUE_PROMPT)
+        if not (parte or "").strip():
+            break  # nada novo a acrescentar: evita laço à toa
+        total += parte
+    return total
 
 
 def _normalizar_alternancia(history):
@@ -356,7 +383,10 @@ def _chat_openai(prompt, preamble, history, model, cfg, max_tokens=None):
                             "max_tokens": (max_tokens or MAX_TOKENS), "temperature": TEMPERATURA})
     if r.status_code != 200:
         raise RuntimeError(f"HTTP {r.status_code}: {r.text[:200]}")
-    return r.json()['choices'][0]['message']['content']
+    choice = r.json()['choices'][0]
+    texto = choice['message']['content']
+    truncado = (choice.get('finish_reason') == 'length')
+    return texto, truncado
 
 
 def _chat_gemini(prompt, preamble, history, model, cfg, max_tokens=None):
@@ -377,7 +407,11 @@ def _chat_gemini(prompt, preamble, history, model, cfg, max_tokens=None):
               "generationConfig": {"maxOutputTokens": (max_tokens or MAX_TOKENS), "temperature": TEMPERATURA}})
     if r.status_code != 200:
         raise RuntimeError(f"HTTP {r.status_code}: {r.text[:200]}")
-    return r.json()['candidates'][0]['content']['parts'][0]['text']
+    cand = r.json()['candidates'][0]
+    partes = cand.get('content', {}).get('parts', [{}])
+    texto = "".join(p.get('text', '') for p in partes)
+    truncado = (cand.get('finishReason') == 'MAX_TOKENS')
+    return texto, truncado
 
 
 def _chat_anthropic(prompt, preamble, history, model, cfg, max_tokens=None):
@@ -398,4 +432,8 @@ def _chat_anthropic(prompt, preamble, history, model, cfg, max_tokens=None):
                             "max_tokens": (max_tokens or MAX_TOKENS), "temperature": TEMPERATURA})
     if r.status_code != 200:
         raise RuntimeError(f"HTTP {r.status_code}: {r.text[:200]}")
-    return r.json()['content'][0]['text']
+    data = r.json()
+    # 'content' é uma lista de blocos; junta todos os de texto (mais robusto que [0]).
+    texto = "".join(b.get('text', '') for b in data.get('content', []) if b.get('type') == 'text')
+    truncado = (data.get('stop_reason') == 'max_tokens')
+    return texto, truncado
