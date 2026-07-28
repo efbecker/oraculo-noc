@@ -370,6 +370,6 @@ def process_oraculo_message(message, username, token_zabbix, grupo_cliente, hist
             "is_html": 0
         }
 
-    logger.info(f"[IA Oracle] Usuário '{username}' iniciou interação livre com o modelo.")
+    logger.info(f"[IA: {ai_providers.label_for_user(username)}] Usuário '{username}' iniciou interação livre.")
     reply = exec_chat_with_oracle(message, username=username, context=context, chat_history_rows=history_rows)
     return {"reply": reply}
