@@ -60,10 +60,10 @@ def salvar_relatorio(html, *, grupo, criado_por, titulo=''):
         tamanho = os.path.getsize(caminho)
         agora = time.time()
         db.execute(
-            "INSERT INTO reports (id, grupo_cliente, criado_por, titulo, arquivo, "
-            "tamanho, criado_em, criado_ts, expira_ts) VALUES (?,?,?,?,?,?,?,?,?)",
-            (rid, grupo or '', criado_por or '', titulo or '', arquivo,
-             int(tamanho), _agora_iso(), agora, agora + RETENCAO_DIAS * 86400)
+            "INSERT INTO reports (id, tipo, grupo_cliente, criado_por, titulo, arquivo, "
+            "ref, tamanho, criado_em, criado_ts, expira_ts) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (rid, 'finops', grupo or '', criado_por or '', titulo or '', arquivo,
+             None, int(tamanho), _agora_iso(), agora, agora + RETENCAO_DIAS * 86400)
         )
         return rid
     except Exception as e:
@@ -100,6 +100,81 @@ def usuario_pode_acessar(row, *, grupo_sessao, perfil):
     if g == 'GLOBAL':
         return True
     return bool(g) and row.get('grupo_cliente') == g
+
+
+def registrar_secops(scan_id, *, target, criado_por, grupo=''):
+    """Registra um relatório SecOps no MESMO índice (tabela reports), como
+    metadado apenas. O SecOps NÃO tem arquivo próprio: o conteúdo continua em
+    scans.result_json e é renderizado sob demanda por /api/download/<scan_id>.
+    Aqui guardamos só o ponteiro ('ref' = scan_id) para o painel Admin listar os
+    dois tipos de relatório juntos. Idempotente: se já houver registro para este
+    scan, não duplica. Nunca levanta exceção para fora."""
+    try:
+        if not scan_id:
+            return None
+        ja = db.query_one("SELECT id FROM reports WHERE tipo='secops' AND ref=?", (scan_id,))
+        if ja:
+            return ja['id']
+        purgar_expirados()
+        rid = secrets.token_urlsafe(24)
+        agora = time.time()
+        db.execute(
+            "INSERT INTO reports (id, tipo, grupo_cliente, criado_por, titulo, arquivo, "
+            "ref, tamanho, criado_em, criado_ts, expira_ts) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (rid, 'secops', grupo or '', criado_por or '', f"SecOps · {target}", None,
+             scan_id, 0, _agora_iso(), agora, agora + RETENCAO_DIAS * 86400)
+        )
+        return rid
+    except Exception as e:
+        print(f"[report_store] Falha ao registrar SecOps: {e}")
+        return None
+
+
+def _url_download(row):
+    """Monta a URL de download correta para cada tipo de relatório."""
+    if row.get('tipo') == 'secops':
+        return f"/api/download/{row.get('ref') or ''}"
+    return f"/reports/{row.get('id')}"
+
+
+def listar_todos(limite=200):
+    """Lista TODOS os relatórios (FinOps + SecOps), mais recentes primeiro, para
+    o painel Admin. Cada item já vem com a 'url' de download pronta. Nunca
+    levanta exceção."""
+    try:
+        rows = db.query_all(
+            "SELECT id, tipo, grupo_cliente, criado_por, titulo, tamanho, criado_em, "
+            "criado_ts, ref FROM reports ORDER BY criado_ts DESC LIMIT ?",
+            (int(limite),)
+        )
+        for r in rows:
+            r['url'] = _url_download(r)
+        return rows
+    except Exception as e:
+        print(f"[report_store] Falha ao listar relatórios: {e}")
+        return []
+
+
+def remover(rid):
+    """Remove um relatório do índice (e o arquivo em disco, se for FinOps). Não
+    apaga o scan de origem do SecOps — só tira do índice/painel. Retorna True se
+    removeu algo. Silencioso e tolerante a falha."""
+    try:
+        row = db.query_one("SELECT arquivo FROM reports WHERE id=?", (rid,))
+        if not row:
+            return False
+        if row.get('arquivo'):
+            p = os.path.join(REPORTS_DIR, row['arquivo'])
+            if os.path.isfile(p):
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
+        db.execute("DELETE FROM reports WHERE id=?", (rid,))
+        return True
+    except Exception as e:
+        print(f"[report_store] Falha ao remover relatório: {e}")
+        return False
 
 
 def listar_por_grupo(grupo, limite=50):
