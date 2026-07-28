@@ -240,6 +240,24 @@ def config_for_user(username):
     return current_config(mask_key=False)
 
 
+def label_for_user(username):
+    """Rótulo curto e amigável da IA que ESTE usuário usa — para os logs, no
+    lugar do antigo '[IA Oracle]' fixo. Reflete o que está configurado em
+    Admin > Inteligência Artificial (provedor + modelo, ou o perfil do cliente).
+    Ex.: 'Google Gemini · gemini-2.0-flash'. NUNCA inclui a chave de API e nunca
+    levanta exceção — se algo falhar, devolve 'IA não configurada'."""
+    try:
+        cfg = config_for_user(username)
+        provider = (cfg.get('provider') or '').strip().lower()
+        if not provider:
+            return 'IA não configurada'
+        label = PROVIDER_LABELS.get(provider, provider)
+        modelo = (cfg.get('model') or '').strip() or MODELO_PADRAO.get(provider, '') or '(modelo padrão)'
+        return f"{label} · {modelo}"
+    except Exception:
+        return 'IA não configurada'
+
+
 # ==========================================================================
 # CHAT — despacho por provedor
 # --------------------------------------------------------------------------
