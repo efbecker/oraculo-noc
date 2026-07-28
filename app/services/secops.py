@@ -308,6 +308,16 @@ def start_scan_thread(target, username, session_id=None):
                     resultado_final = f"🛡️ **Nmap scan report para {target}:**\n\n{report_md}\n\n[BOTÃO_DOWNLOAD:{scan_id}]"
                     result_payload = {"scan_data": scan_data, "ai_analysis": report_md}
                     final_status = "finished"
+
+                    # Registra o relatório SecOps no índice unificado (tabela
+                    # reports) para aparecer no painel Admin > Relatórios junto
+                    # dos FinOps. Só metadado/ponteiro — o conteúdo continua em
+                    # scans.result_json. Tolerante a falha: não pode derrubar o scan.
+                    try:
+                        from app.services import report_store
+                        report_store.registrar_secops(scan_id, target=target, criado_por=username)
+                    except Exception as e:
+                        logger.error(f"[SecOps] Falha ao indexar relatório {scan_id}: {e}")
                 else:
                     resultado_final = f"🛡️ **Nmap scan report:**\nNenhum host ativo detectado em `{target}`."
                     final_status = "error"
