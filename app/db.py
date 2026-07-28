@@ -401,10 +401,12 @@ def init_schema():
         cur.execute("""
             CREATE TABLE IF NOT EXISTS reports (
                 id TEXT PRIMARY KEY,
+                tipo TEXT DEFAULT 'finops',
                 grupo_cliente TEXT,
                 criado_por TEXT,
                 titulo TEXT,
                 arquivo TEXT,
+                ref TEXT,
                 tamanho INTEGER,
                 criado_em TEXT,
                 criado_ts REAL,
@@ -428,6 +430,11 @@ def init_schema():
         # nomeado em instance/ai_profiles.json (ex.: 'Gemini-Pollux'). Vazio/NULL
         # = usa a IA global padrão. Migração automática em bancos existentes.
         _add_column_if_missing(conn, 'users', 'ai_profile', 'TEXT')
+        # 'reports' ganhou tipo/ref para unificar FinOps e SecOps num só índice
+        # (painel Admin > Relatórios). 'tipo' = finops|secops; 'ref' = id de
+        # origem quando não há arquivo próprio (ex.: scan_id do SecOps).
+        _add_column_if_missing(conn, 'reports', 'tipo', "TEXT DEFAULT 'finops'")
+        _add_column_if_missing(conn, 'reports', 'ref', 'TEXT')
 
         # Índices que ajudam as consultas mais quentes.
         cur.execute("CREATE INDEX IF NOT EXISTS idx_chat_hist_user_sess ON chat_history(username, session_id)")
