@@ -321,11 +321,11 @@ def process_oraculo_message(message, username, token_zabbix, grupo_cliente, hist
         if target == "TODOS":
             label = f"Relatório FinOps ({dias_txt} dia(s))"
             def _gerar():
-                return gerar_relatorio_consumo_todos(dias, token_zabbix, grupo_cliente, zabbix_url)
+                return gerar_relatorio_consumo_todos(dias, token_zabbix, grupo_cliente, zabbix_url, criado_por=username)
         else:
             label = f"Relatório {target} ({dias_txt} dia(s))"
             def _gerar():
-                return gerar_grafico_zabbix(target, metrica, dias, token_zabbix, grupo_cliente, zabbix_url)
+                return gerar_grafico_zabbix(target, metrica, dias, token_zabbix, grupo_cliente, zabbix_url, criado_por=username)
 
         job_id = start_report_job(username, label, _gerar, session_id=session_id)
         if not job_id:
