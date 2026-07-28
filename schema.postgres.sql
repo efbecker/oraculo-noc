@@ -57,18 +57,21 @@ CREATE TABLE IF NOT EXISTS scans (
     session_id   TEXT
 );
 
--- Relatórios FinOps/Consumo: apenas METADADOS no banco. O HTML fica em disco
--- privado (instance/reports/), servido por rota autenticada com checagem de
--- tenant (ver app/services/report_store.py). Guardamos o ponteiro (arquivo) e o
--- escopo (grupo_cliente) para controle de acesso — nunca o blob, para não inchar
--- o banco. 'expira_ts' controla a retenção (limpeza automática).
+-- Relatórios (FinOps e SecOps) num índice único. Apenas METADADOS no banco.
+-- FinOps: HTML grande em disco privado (instance/reports/), servido por rota
+-- autenticada com checagem de tenant (ver app/services/report_store.py).
+-- SecOps: NÃO tem arquivo próprio — o conteúdo já vive em scans.result_json e é
+-- renderizado sob demanda; aqui guardamos só o ponteiro ('ref' = scan_id) para
+-- listar no painel Admin > Relatórios. 'expira_ts' controla a retenção.
 CREATE TABLE IF NOT EXISTS reports (
     id             TEXT PRIMARY KEY,   -- token aleatório inadivinhável (vai na URL)
-    grupo_cliente  TEXT,               -- tenant dono do relatório
+    tipo           TEXT DEFAULT 'finops',  -- 'finops' | 'secops'
+    grupo_cliente  TEXT,               -- tenant dono do relatório (vazio p/ SecOps)
     criado_por     TEXT,               -- username que gerou
     titulo         TEXT,
-    arquivo        TEXT,               -- nome do arquivo em instance/reports/
-    tamanho        INTEGER,            -- bytes
+    arquivo        TEXT,               -- nome do arquivo em instance/reports/ (FinOps)
+    ref            TEXT,               -- id de origem quando não há arquivo (scan_id do SecOps)
+    tamanho        INTEGER,            -- bytes (0 quando não há arquivo)
     criado_em      TEXT,               -- data/hora legível (exibição)
     criado_ts      REAL,               -- epoch (ordenação)
     expira_ts      REAL                -- epoch de expiração (retenção)
