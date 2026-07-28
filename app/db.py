@@ -393,6 +393,25 @@ def init_schema():
             )
         """)
 
+        # Relatórios (FinOps/Consumo): apenas os METADADOS ficam no banco. O HTML
+        # em si vive em disco privado (instance/reports/), servido por rota
+        # autenticada com checagem de tenant — ver app/services/report_store.py.
+        # Guardamos o ponteiro (arquivo) + o escopo (grupo_cliente) p/ controle de
+        # acesso, e não o blob, para não inchar o banco com arquivos de vários MB.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS reports (
+                id TEXT PRIMARY KEY,
+                grupo_cliente TEXT,
+                criado_por TEXT,
+                titulo TEXT,
+                arquivo TEXT,
+                tamanho INTEGER,
+                criado_em TEXT,
+                criado_ts REAL,
+                expira_ts REAL
+            )
+        """)
+
         # NOTA: a tabela 'backups' (histórico de backup/restore) NÃO fica aqui —
         # veja app/services/backup_manager.py. Ela vive num SQLite dedicado e
         # separado, fora deste banco. Motivo: se o histórico ficasse dentro do
@@ -414,6 +433,7 @@ def init_schema():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_chat_hist_user_sess ON chat_history(username, session_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user ON chat_sessions(username, created_ts)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_scans_owner_status ON scans(owner, status)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_reports_grupo_ts ON reports(grupo_cliente, criado_ts)")
 
 
 def garantir_admin_padrao():
