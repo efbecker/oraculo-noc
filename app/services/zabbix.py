@@ -8,6 +8,7 @@ import base64
 from datetime import datetime
 from app.settings import ZABBIX_URL
 from app.services import branding
+from app.services import report_store
 
 import matplotlib
 matplotlib.use('Agg')
@@ -557,7 +558,7 @@ def consultar_incidentes_zabbix(nome_alvo: str, dias_historico: float, token: st
 
     except Exception as e: return f"Erro na coleta de incidentes: {str(e)}"
 
-def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str, url: str = None, host_filter: str = None) -> str:
+def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str, url: str = None, host_filter: str = None, criado_por: str = None) -> str:
     """Gera o relatório completo (CPU/memória/rede/discos) para os hosts do
     grupo do usuário. Se host_filter for informado, restringe aos hosts cujo
     nome bate com esse filtro (usado pelo pedido de relatório de UMA VM
@@ -1077,7 +1078,6 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
         if max_mem_global > 85: analise_texto += f"A memória apresentou saturação crítica de <strong style='color:#ff4d4d'>{max_mem_global:.1f}%</strong> na VM <strong>{vm_max_mem}</strong>."
 
         html_filename = f"Dashboard_Executivo_{int(time.time())}.html"
-        html_path = os.path.join(STATIC_DIR, html_filename)
 
         full_html = f"""<!DOCTYPE html><html lang='pt-br'><head><meta charset='UTF-8'><title>FinOps | {grupo}</title><style>
             body{{font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background:#121212; color:#e0e0e0; margin:0; padding:20px; scroll-behavior: smooth;}}
@@ -1108,7 +1108,15 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
         {"".join(secoes_html_vms)}
         </div></body></html>"""
 
-        with open(html_path, 'w', encoding='utf-8') as f: f.write(full_html)
+        # Armazena em disco PRIVADO (instance/reports/) + metadados no banco, e
+        # gera um id inadivinhável. O download é por rota AUTENTICADA (/reports/<id>)
+        # com checagem de tenant — não mais em /static, que era público.
+        report_id = report_store.salvar_relatorio(
+            full_html,
+            grupo=grupo,
+            criado_por=criado_por,
+            titulo=f"FinOps | {grupo} | {dias} dia(s)"
+        )
 
         html_progress = (
             "<div style='margin-bottom: 15px; font-family: sans-serif;'>"
@@ -1125,19 +1133,28 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
 
         msg_chat = "<p style='color:#00e5ff; font-weight:bold; font-size:15px; margin-bottom:10px;'>✅ Relatório Concluído</p>"
 
-        botao_html = (
-            f"<a href='/static/{html_filename}' download='{html_filename}' "
-            "style='display: inline-block; background-color: #00e5ff; color: #121212; padding: 10px 20px; "
-            "text-decoration: none; border-radius: 5px; font-family: sans-serif; font-weight: bold; font-size: 13px; "
-            "border: 1px solid #00b4d8; margin-top: 5px; transition: background-color 0.3s;' "
-            "onmouseover=\"this.style.backgroundColor='#00b4d8'\" onmouseout=\"this.style.backgroundColor='#00e5ff'\">"
-            "📥 Baixar Relatório</a>"
-        )
+        if report_id:
+            botao_html = (
+                f"<a href='/reports/{report_id}' target='_blank' rel='noopener' "
+                f"download='{html_filename}' "
+                "style='display: inline-block; background-color: #00e5ff; color: #121212; padding: 10px 20px; "
+                "text-decoration: none; border-radius: 5px; font-family: sans-serif; font-weight: bold; font-size: 13px; "
+                "border: 1px solid #00b4d8; margin-top: 5px; transition: background-color 0.3s;' "
+                "onmouseover=\"this.style.backgroundColor='#00b4d8'\" onmouseout=\"this.style.backgroundColor='#00e5ff'\">"
+                "📥 Baixar Relatório</a>"
+            )
+        else:
+            # Falha ao armazenar: não deixa o cliente sem resposta nem cria link quebrado.
+            botao_html = (
+                "<p style='color:#ffb020; font-size:13px; font-family:sans-serif; margin-top:5px;'>"
+                "⚠️ O relatório foi gerado, mas houve uma falha ao armazená-lo. "
+                "Tente gerar novamente.</p>"
+            )
 
         return html_progress + msg_chat + botao_html
     except Exception as e: return f"Erro ao gerar relatório global: {str(e)}"
 
-def gerar_grafico_zabbix(nome_host: str, metrica: str, quantidade_dias: float, token: str, grupo: str = None, url: str = None) -> str:
+def gerar_grafico_zabbix(nome_host: str, metrica: str, quantidade_dias: float, token: str, grupo: str = None, url: str = None, criado_por: str = None) -> str:
     """Relatório de UMA VM específica, pedida por nome (ex.: "gere relatório
     da VM CLIENTE_ASV_VM_ASV-BD01-IPEL"). Reaproveita o MESMO motor/layout do
     relatório de "TODOS" (gerar_relatorio_consumo_todos), só restringindo a
@@ -1148,7 +1165,7 @@ def gerar_grafico_zabbix(nome_host: str, metrica: str, quantidade_dias: float, t
     do host NUNCA sai do grupo/conta do usuário que pediu o relatório, mesmo
     que exista uma VM com nome parecido em outra conta.
     """
-    return gerar_relatorio_consumo_todos(quantidade_dias, token, grupo, url, host_filter=nome_host)
+    return gerar_relatorio_consumo_todos(quantidade_dias, token, grupo, url, host_filter=nome_host, criado_por=criado_por)
 
 
 
