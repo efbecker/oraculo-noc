@@ -81,7 +81,8 @@ def _parse_disk_key(key_):
 # consultado à parte das métricas numéricas do relatório.
 SO_NAME_REGEX = re.compile(r'sistema\s+operacional', re.IGNORECASE)
 SO_KEY_REGEX = re.compile(
-    r'(?:vmware\.vm\.guest\.osfullname|guest\.osfullname|system\.sw\.os|\bos(?:full)?name\b)',
+    r'(?:vmware\.vm\.guest\.osfullname|guest\.osfullname|guestfullname|'
+    r'config\.guestfullname|system\.sw\.os|\bos(?:full)?name\b)',
     re.IGNORECASE
 )
 
@@ -1229,10 +1230,20 @@ def montar_inventario_para_ia(token, grupo, url=None):
                 "output": ["itemid", "hostid", "name", "key_", "units", "lastvalue"]
             }, token, url))
 
-        dados = {hid: {'vcpu': None, 'ram': None, 'ram_bytes': None,
-                       'cpu_ghz': None, 'cpu_pct_direto': None,
-                       'mem_vm': None, 'mem_generico': None,
-                       'disks': {}} for hid in host_ids}
+        dados = {hid: {
+            'vcpu': None,
+            'ram_bytes': None, 'ram': None,
+            # --- VMware API (fonte primária, casada por CHAVE exata) ---
+            'cpu_usage_ghz': None,     # vmware.vm.cpu.usage (consumo)  -> numerador
+            'cpu_capacity_ghz': None,  # vmware.vm.cpu.capacity.ghz     -> denominador
+            'cpu_pct_perf': None,      # vmware.vm.cpu.usage.perf (% pronto, fallback)
+            'mem_guest_bytes': None,   # vmware.vm.memory.size.usage.guest (bytes)
+            'mem_host_pct': None,      # vmware.vm.memory.usage (% do HOST, diverge do SO)
+            # --- Agente Zabbix / templates não-VMware (fallback) ---
+            'cpu_pct_agent': None,
+            'mem_pct_agent': None,
+            'disks': {},
+        } for hid in host_ids}
 
         def _num(lv):
             try:
@@ -1241,21 +1252,18 @@ def montar_inventario_para_ia(token, grupo, url=None):
                 return None
 
         def _melhor_uso(atual, novo_val):
-            # Mantém o MAIOR uso atual quando o host tem vários itens do mesmo
-            # tipo (ex.: CPU por core + CPU total) — o pior caso é o que importa
-            # para responder "quem está sobrecarregado".
+            # Mantém o MAIOR uso quando há vários itens do mesmo tipo (pior caso).
             if novo_val is None:
                 return atual
             if atual is None or novo_val > atual:
                 return novo_val
             return atual
 
-        def _cpu_consumo_ghz(units, val):
-            """Converte o valor de CONSUMO de CPU para GHz. No VMware o item de
-            uso de CPU vem em Hz (ex.: 1.953.000.000 = 1,953 GHz) — era isso que
-            aparecia como '1.953.000.000%'. Devolve GHz consumido, ou None se o
-            valor for pequeno demais para ser consumo em frequência (nesse caso
-            provavelmente já é um percentual pronto)."""
+        def _freq_para_ghz(units, val):
+            """Normaliza um valor de FREQUÊNCIA para GHz. Aceita Hz/MHz/GHz pela
+            unidade e, na ausência dela, decide pela ordem de grandeza. Cobre o
+            item vmware.vm.cpu.usage (vem em Hz: 1.953.000.000 = 1,953 GHz) e o
+            calculado vmware.vm.cpu.capacity.ghz (já em GHz: 24)."""
             if val is None:
                 return None
             u = (units or '').lower()
@@ -1265,21 +1273,15 @@ def montar_inventario_para_ia(token, grupo, url=None):
                 return val / 1e3
             if 'hz' in u:
                 return val / 1e9
-            # Sem unidade de frequência clara: decide pela ordem de grandeza.
             if val >= 1e6:
-                return val / 1e9    # Hz
-            if val >= 1e3:
-                return val / 1e3    # provavelmente MHz
-            return None             # valor baixo: tratamos como % pronto
+                return val / 1e9     # Hz
+            if val >= 1e4:
+                return val / 1e3     # MHz
+            return val               # já em GHz (ex.: 24)
 
-        # Sinais mais tolerantes que o do relatório: os templates OFICIAIS do
-        # Zabbix usam "CPU utilization" e "Number of CPUs" — que os \bnum\b/\butil\b
-        # estritos não pegavam. Aqui usamos prefixos (utiliz, núcleo) e a UNIDADE.
+        # Heurísticas de NOME/UNIDADE — usadas só no FALLBACK (agente/não-VMware).
         _USO_REGEX = re.compile(r'(uso|usage|utiliz|util|percent|carga|load|ocupa)', re.IGNORECASE)
         _CORE_REGEX = re.compile(r'(núcleo|nucleo|core|cores|number|númer|numer|\bnum\b|count|quantidade|vcpu)', re.IGNORECASE)
-        # Item de memória preferido pelo cliente: "Uso de memória da VM" — é o que
-        # reflete melhor o uso real dentro do SO (o % genérico do VMware diverge).
-        _MEM_VM_REGEX = re.compile(r'uso\s+de\s+mem', re.IGNORECASE)
 
         for it in items:
             hid = it.get('hostid')
@@ -1287,49 +1289,79 @@ def montar_inventario_para_ia(token, grupo, url=None):
                 continue
             nl = (it.get('name') or '').lower()
             ul = (it.get('units') or '').lower()
-            lv = it.get('lastvalue')
-            val = _num(lv)
-            eh_freq = 'hz' in ul                       # hz / mhz / ghz / khz
-            eh_percentual = ('%' in ul) or bool(_USO_REGEX.search(nl))
-            eh_cpu = 'cpu' in nl or 'processad' in nl or 'núcleo' in nl or 'nucleo' in nl
-            eh_mem = bool(re.search(r'\b(mem|memória|memoria|memory|ram)\b', nl))
-            eh_core = bool(_CORE_REGEX.search(nl))
+            val = _num(it.get('lastvalue'))
+            # Chave técnica sem os parâmetros [{$VMWARE.URL},...]: é o que
+            # identifica o item de forma inequívoca, em qualquer idioma.
+            key_base = (it.get('key_') or '').split('[', 1)[0].strip().lower()
 
-            # vCPUs alocadas (contagem de núcleos) — nunca é frequência nem %.
-            if eh_cpu and eh_core and not eh_freq and '%' not in ul:
+            # ================= CORRESPONDÊNCIA POR CHAVE EXATA (VMware API) ==========
+            # É o que elimina de vez a confusão que dava "100% em todas": o item de
+            # CONSUMO (cpu.usage) e o de CAPACIDADE (cpu.capacity.ghz) agora são
+            # lidos em campos separados, nunca um no lugar do outro.
+            if key_base == 'vmware.vm.cpu.num':
                 if val is not None and 0 < val < 4096:
                     dados[hid]['vcpu'] = int(val)
-            # Consumo de CPU (Hz/MHz/GHz) OU % pronto de CPU.
-            elif eh_cpu and not eh_core and (eh_freq or eh_percentual):
-                ghz = _cpu_consumo_ghz(ul, val)
-                if ghz is not None:
-                    dados[hid]['cpu_ghz'] = _melhor_uso(dados[hid]['cpu_ghz'], ghz)
-                elif val is not None and val <= 100:
-                    dados[hid]['cpu_pct_direto'] = _melhor_uso(dados[hid]['cpu_pct_direto'], val)
-            # Memória preferida do cliente: "Uso de memória da VM".
-            elif eh_mem and _MEM_VM_REGEX.search(nl):
+                continue
+            if key_base == 'vmware.vm.cpu.usage':               # consumo (Hz -> GHz)
+                g = _freq_para_ghz(ul, val)
+                if g is not None:
+                    dados[hid]['cpu_usage_ghz'] = _melhor_uso(dados[hid]['cpu_usage_ghz'], g)
+                continue
+            if key_base == 'vmware.vm.cpu.capacity.ghz':        # capacidade (GHz)
+                c = _freq_para_ghz(ul, val)
+                if c and c > 0:
+                    dados[hid]['cpu_capacity_ghz'] = c
+                continue
+            if key_base == 'vmware.vm.cpu.usage.perf':          # % pronto (fallback)
                 if val is not None:
-                    dados[hid]['mem_vm'] = _melhor_uso(dados[hid]['mem_vm'], val)
-            # RAM total (bytes) — para exibir e, se preciso, calcular % de bytes.
-            elif eh_mem and 'total' in nl and 'uso' not in nl and not eh_percentual:
+                    dados[hid]['cpu_pct_perf'] = _melhor_uso(dados[hid]['cpu_pct_perf'], val)
+                continue
+            if key_base == 'vmware.vm.memory.size':             # RAM total (bytes)
                 if val is not None and val > 0:
                     dados[hid]['ram_bytes'] = val
                     dados[hid]['ram'] = _fmt_ram_bytes(val)
-            # Uso genérico de memória (%) — fallback se não houver o item preferido.
-            elif eh_mem and eh_percentual and 'total' not in nl:
+                continue
+            if key_base == 'vmware.vm.memory.size.usage.guest':  # guest usado (bytes)
+                if val is not None and val >= 0:
+                    dados[hid]['mem_guest_bytes'] = val
+                continue
+            if key_base == 'vmware.vm.memory.usage':            # % do HOST (fallback)
                 if val is not None:
-                    dados[hid]['mem_generico'] = _melhor_uso(dados[hid]['mem_generico'], val)
-            else:
-                # Uso de disco por partição (% usado), via chave técnica.
-                mount, kind = _parse_disk_key(it.get('key_', ''))
-                if mount and kind in ('pused', 'pfree'):
-                    ident = _norm_mount(mount)
-                    if ident and not DISCOS_BLOQUEADOS_REGEX.search(mount):
-                        if val is not None:
-                            usado = val if kind == 'pused' else max(0.0, 100.0 - val)
-                            ant = dados[hid]['disks'].get(ident)
-                            if ant is None or usado > ant:
-                                dados[hid]['disks'][ident] = usado
+                    dados[hid]['mem_host_pct'] = val
+                continue
+
+            # Disco (VMware ou agente): já tratado pela chave técnica.
+            mount, kind = _parse_disk_key(it.get('key_', ''))
+            if mount and kind in ('pused', 'pfree'):
+                ident = _norm_mount(mount)
+                if ident and not DISCOS_BLOQUEADOS_REGEX.search(mount) and val is not None:
+                    usado = val if kind == 'pused' else max(0.0, 100.0 - val)
+                    ant = dados[hid]['disks'].get(ident)
+                    if ant is None or usado > ant:
+                        dados[hid]['disks'][ident] = usado
+                continue
+
+            # ================= FALLBACK POR NOME (agente Zabbix / não-VMware) ========
+            # Só preenche o que a API não trouxe. Nunca sobrescreve dado da API.
+            eh_cpu = 'cpu' in nl or 'processad' in nl
+            eh_mem = bool(re.search(r'\b(mem|memória|memoria|memory|ram)\b', nl))
+            eh_core = bool(_CORE_REGEX.search(nl))
+            eh_percentual = ('%' in ul) or bool(_USO_REGEX.search(nl))
+            eh_freq = 'hz' in ul
+
+            if eh_cpu and eh_core and not eh_freq and '%' not in ul:
+                if dados[hid]['vcpu'] is None and val is not None and 0 < val < 4096:
+                    dados[hid]['vcpu'] = int(val)
+            elif eh_cpu and not eh_core and eh_percentual and not eh_freq:
+                if val is not None and val <= 100:
+                    dados[hid]['cpu_pct_agent'] = _melhor_uso(dados[hid]['cpu_pct_agent'], val)
+            elif eh_mem and 'total' in nl and 'uso' not in nl and not eh_percentual:
+                if dados[hid]['ram_bytes'] is None and val is not None and val > 1000:
+                    dados[hid]['ram_bytes'] = val
+                    dados[hid]['ram'] = _fmt_ram_bytes(val)
+            elif eh_mem and eh_percentual and 'total' not in nl:
+                if val is not None and val <= 100:
+                    dados[hid]['mem_pct_agent'] = _melhor_uso(dados[hid]['mem_pct_agent'], val)
 
         # ---- Monta o texto do inventário ----
         n_win = n_lin = n_outro = 0
@@ -1349,26 +1381,38 @@ def montar_inventario_para_ia(token, grupo, url=None):
             vcpu = f"{d['vcpu']}" if d['vcpu'] is not None else "n/d"
             ram = d['ram'] or "n/d"
 
-            # ---- CPU: % baseado em GHz (cada vCPU = 2 GHz no cluster) ----
-            cap_ghz = (d['vcpu'] * GHZ_POR_VCPU) if d['vcpu'] else None
-            if d['cpu_ghz'] is not None and cap_ghz:
-                pct = min(100.0, max(0.0, d['cpu_ghz'] / cap_ghz * 100.0))
-                cpu = f"{pct:.0f}% ({d['cpu_ghz']:.2f} de {cap_ghz:.0f} GHz)"
-            elif d['cpu_pct_direto'] is not None:
-                cpu = f"{d['cpu_pct_direto']:.0f}%"
-            elif d['cpu_ghz'] is not None:
-                # Temos o consumo, mas não a contagem de vCPU para calcular o %.
-                cpu = f"{d['cpu_ghz']:.2f} GHz (vCPU n/d)"
+            # ---- CPU: consumo (cpu.usage) ÷ capacidade (capacity.ghz) ----
+            # É o par que, via API VMware (sem agente no guest), mais se aproxima
+            # do que o SO mostra. Ordem de preferência do denominador:
+            #   1) capacity.ghz (real, calculado pelo Zabbix)
+            #   2) vCPUs × 2 GHz (padrão do cluster) — se não houver capacity.ghz
+            us_ghz = d['cpu_usage_ghz']
+            cap = d['cpu_capacity_ghz'] or ((d['vcpu'] * GHZ_POR_VCPU) if d['vcpu'] else None)
+            if us_ghz is not None and cap:
+                pct = min(100.0, max(0.0, us_ghz / cap * 100.0))
+                cpu = f"{pct:.0f}% ({us_ghz:.2f} de {cap:.1f} GHz)"
+            elif d['cpu_pct_perf'] is not None:
+                cpu = f"{d['cpu_pct_perf']:.0f}%"
+            elif d['cpu_pct_agent'] is not None:
+                cpu = f"{d['cpu_pct_agent']:.0f}%"
+            elif us_ghz is not None:
+                cpu = f"{us_ghz:.2f} GHz (capacidade n/d)"
             else:
                 cpu = "n/d"
 
-            # ---- Memória: prioriza o item "Uso de memória da VM" ----
-            mem_val = d['mem_vm']
-            if mem_val is not None and mem_val > 100 and d['ram_bytes']:
-                mem_val = min(100.0, mem_val / d['ram_bytes'] * 100.0)
-            if mem_val is None:
-                mem_val = d['mem_generico']  # fallback
-            mem = f"{mem_val:.0f}%" if mem_val is not None else "n/d"
+            # ---- Memória: guest usado (bytes) ÷ RAM total (bytes) ----
+            # vmware.vm.memory.size.usage.guest é a memória REAL do guest; o item
+            # em % (vmware.vm.memory.usage) é do HOST e diverge do SO, por isso só
+            # entra como último recurso.
+            if d['mem_guest_bytes'] is not None and d['ram_bytes']:
+                pct = min(100.0, max(0.0, d['mem_guest_bytes'] / d['ram_bytes'] * 100.0))
+                mem = f"{pct:.0f}%"
+            elif d['mem_pct_agent'] is not None:
+                mem = f"{d['mem_pct_agent']:.0f}%"
+            elif d['mem_host_pct'] is not None:
+                mem = f"{d['mem_host_pct']:.0f}% (host)"
+            else:
+                mem = "n/d"
 
             if d['disks']:
                 disco = ", ".join(f"{mp} {pct:.0f}%" for mp, pct in sorted(d['disks'].items()))
@@ -1384,9 +1428,10 @@ def montar_inventario_para_ia(token, grupo, url=None):
             "\n--- INVENTÁRIO DETALHADO DAS VMs (dados AO VIVO do Zabbix — lastvalue) ---\n"
             f"Total de hosts/VMs: {total} | Windows: {n_win} | Linux: {n_lin} | Outros/indefinidos: {n_outro}\n"
             "Colunas: VM | Sistema Operacional | vCPUs alocadas | RAM total | CPU agora | Memória agora | Disco usado por partição\n"
-            f"Base do cálculo de CPU: cada vCPU = {GHZ_POR_VCPU:.0f} GHz no cluster VMware; "
-            "'CPU agora' = GHz consumidos / (vCPUs × 2 GHz) × 100. Memória vem do item "
-            "'Uso de memória da VM' (o mais fiel ao uso real dentro do SO).\n"
+            "Base de cálculo (via API VMware): 'CPU agora' = consumo (vmware.vm.cpu.usage) ÷ "
+            "capacidade (vmware.vm.cpu.capacity.ghz) × 100. 'Memória agora' = memória do guest "
+            "(vmware.vm.memory.size.usage.guest) ÷ RAM total × 100 — os itens que mais se "
+            "aproximam do que o Sistema Operacional reporta.\n"
             "('n/d' = a métrica não é monitorada para essa VM no Zabbix)\n\n"
             "| VM | Sistema Operacional | vCPUs | RAM | CPU agora | Memória agora | Disco |\n"
             "|----|--------------------|-------|-----|-----------|---------------|-------|\n"
