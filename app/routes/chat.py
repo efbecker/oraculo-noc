@@ -1,13 +1,15 @@
+import os
 import uuid
 import json
 import re
 from datetime import datetime
-from flask import Blueprint, render_template, session, redirect, url_for, request, jsonify, Response
+from flask import Blueprint, render_template, session, redirect, url_for, request, jsonify, Response, send_file
 from app.routes.auth import login_required
 from app.services.ai_engine import process_oraculo_message
 from app import db
 from app.services import branding
 from app.services import secops_render
+from app.services import report_store
 
 bp = Blueprint('chat', __name__)
 
@@ -188,6 +190,31 @@ def get_active_scans():
         return jsonify(rows)
     except Exception as e:
         return jsonify([])
+
+@bp.route('/reports/<report_id>', methods=['GET'])
+@login_required
+def serve_finops_report(report_id):
+    """Serve o relatório FinOps de forma AUTENTICADA e com checagem de tenant.
+    Substitui o antigo link público /static/... : agora o arquivo vive em disco
+    privado (instance/reports/) e só é entregue se o usuário logado pertencer ao
+    mesmo grupo do relatório (ou for administrador)."""
+    row = report_store.obter_relatorio(report_id)
+    if not row or not row.get('caminho') or not os.path.isfile(row['caminho']):
+        return "Relatório não disponível ou expirado.", 404
+
+    if not report_store.usuario_pode_acessar(
+        row,
+        grupo_sessao=session.get('grupo_cliente'),
+        perfil=session.get('profile'),
+    ):
+        return "Acesso negado.", 403
+
+    # Inline (abre no navegador). O atributo download='' do botão no chat cuida
+    # do caso em que o usuário prefere baixar o arquivo.
+    nome = re.sub(r'[^A-Za-z0-9._-]+', '_', (row.get('titulo') or 'Relatorio')).strip('_') or 'Relatorio'
+    return send_file(row['caminho'], mimetype='text/html', as_attachment=False,
+                     download_name=f"{nome}.html")
+
 
 @bp.route('/api/download/<scan_id>', methods=['GET'])
 @login_required
