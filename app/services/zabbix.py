@@ -70,6 +70,91 @@ def _parse_disk_key(key_):
     kind = (m.group(2) or '').lower() or None
     return mount, kind
 
+# --------------------------------------------------------------------------
+# SISTEMA OPERACIONAL DA VM
+# --------------------------------------------------------------------------
+# O item que carrega o SO no ambiente do cliente se chama SEMPRE
+# "Sistema Operacional da VM" (nome pedido pelo cliente). Além do nome,
+# reconhecemos também as CHAVES padrão do VMware/agente Zabbix como respaldo
+# — assim o SO é detectado mesmo se o item for renomeado ou vier de outro
+# template. O valor desse item é TEXTO (value_type 1/4), por isso ele é
+# consultado à parte das métricas numéricas do relatório.
+SO_NAME_REGEX = re.compile(r'sistema\s+operacional', re.IGNORECASE)
+SO_KEY_REGEX = re.compile(
+    r'(?:vmware\.vm\.guest\.osfullname|guest\.osfullname|system\.sw\.os|\bos(?:full)?name\b)',
+    re.IGNORECASE
+)
+
+# Normalizador de ponto de montagem em nível de módulo (mesma regra da função
+# do relatório): aceita disco Linux ('/...') ou drive Windows (uma letra).
+# Fica aqui fora para o INVENTÁRIO da IA reaproveitar sem depender do closure
+# interno de gerar_relatorio_consumo_todos.
+def _norm_mount(mount):
+    if not mount:
+        return None
+    m = mount.strip().strip('\'"')
+    if m.startswith('/'):
+        m = m.rstrip('/')
+        return m or '/'
+    wm = re.fullmatch(r'([A-Za-z]):?[\\/]?', m)
+    if wm:
+        return wm.group(1).upper() + ':'
+    return None
+
+
+def classificar_familia_so(texto):
+    """Devolve 'Windows', 'Linux' ou None a partir do texto do SO da VM.
+    Usado tanto para o ícone no cabeçalho do relatório quanto para a
+    contagem de servidores Windows/Linux no inventário da IA."""
+    if not texto:
+        return None
+    t = str(texto).lower()
+    if 'windows' in t or 'microsoft' in t:
+        return 'Windows'
+    if any(x in t for x in (
+        'linux', 'ubuntu', 'debian', 'centos', 'red hat', 'redhat', 'rhel',
+        'suse', 'fedora', 'rocky', 'alma', 'oracle linux', 'freebsd', 'unix',
+        'gnu/'
+    )):
+        return 'Linux'
+    return None
+
+
+def coletar_so_por_host(host_ids, token, url=None):
+    """Busca o Sistema Operacional (texto) de cada host informado.
+
+    Como o valor do SO é um item de TEXTO (value_type 1/4), ele NÃO vem nas
+    consultas numéricas do relatório — por isso esta função faz uma coleta
+    dedicada. Retorna {hostid: 'Microsoft Windows Server 2019', ...}.
+
+    Nunca levanta exceção: o SO é um enriquecimento; se a coleta falhar, o
+    relatório/inventário segue vivo sem ele (mostra 'SO não informado')."""
+    so_por_host = {}
+    if not host_ids:
+        return so_por_host
+    try:
+        for lote in _chunks(list(host_ids), 50):
+            itens = zabbix_api("item.get", {
+                "hostids": lote,
+                "output": ["hostid", "name", "key_", "lastvalue"],
+                "filter": {"value_type": ["1", "4"]},  # 1=char, 4=text
+            }, token, url)
+            for it in itens:
+                hid = it.get('hostid')
+                if not hid or hid in so_por_host:
+                    continue
+                nome = it.get('name', '') or ''
+                key_ = it.get('key_', '') or ''
+                val = (it.get('lastvalue') or '').strip()
+                if not val:
+                    continue
+                if SO_NAME_REGEX.search(nome) or SO_KEY_REGEX.search(key_):
+                    so_por_host[hid] = val
+    except Exception as e:
+        print(f"[zabbix] Aviso: falha ao coletar SO dos hosts: {e}")
+    return so_por_host
+
+
 STATIC_DIR = os.path.join(os.getcwd(), 'app', 'static')
 os.makedirs(STATIC_DIR, exist_ok=True)
 
@@ -485,7 +570,11 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
                 "filter": {"status": "0", "value_type": ["0", "3"]},
                 "output": ["itemid", "hostid", "name", "value_type", "units", "key_", "lastvalue", "lastclock"]
             }, token, url))
-        
+
+        # SO da VM (item de TEXTO — não vem na consulta numérica acima). Vai para
+        # o cabeçalho de cada VM no relatório. Coleta tolerante a falha.
+        so_por_host = coletar_so_por_host(host_ids, token, url)
+
         host_items = {h['hostid']: {'cpu': [], 'mem': [], 'nets': {}, 'vpn_users': [], 'disks': [], '_disk_map': {}, 'cpu_total': None, 'mem_total': None, 'uptime': None} for h in hosts}
         
         def is_valid_net(nl):
@@ -904,10 +993,25 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
 
             img_tag = f"<img src='data:image/png;base64,{img_b64}' style='width:100%; border-radius:6px; border: 1px solid #2a2a2a;'>" if img_b64 else ""
 
+            # ---- Selo de Sistema Operacional no cabeçalho da VM ----
+            # Item "Sistema Operacional da VM" (coletado à parte, pois é texto).
+            # Ícone por família: 🪟 Windows, 🐧 Linux, 💻 desconhecido/não informado.
+            so_txt = so_por_host.get(hid)
+            _fam = classificar_familia_so(so_txt)
+            _ic = '🪟' if _fam == 'Windows' else ('🐧' if _fam == 'Linux' else '💻')
+            _cor_so = '#00a2ff' if _fam == 'Windows' else ('#00e676' if _fam == 'Linux' else '#888')
+            _so_label = so_txt if so_txt else 'SO não informado'
+            so_badge_html = (
+                f"<span style='display:inline-block; margin-left:12px; padding:3px 12px; "
+                f"background:#121212; border:1px solid {_cor_so}; border-radius:14px; "
+                f"font-size:13px; font-weight:600; color:{_cor_so}; vertical-align:middle; "
+                f"font-family:sans-serif;'>{_ic} {_so_label}</span>"
+            )
+
             secoes_html_vms.append(f"""
             <div id='vm_{hid}' style='background:#1e1e1e; padding:25px; border-radius:8px; margin-bottom:40px; border:1px solid #333; box-shadow: 0 4px 15px rgba(0,0,0,0.5);'>
                 <h2 style='color:#ffffff; margin-top:0; border-bottom:1px solid #333; padding-bottom:10px;'>
-                    <span class='status-dot green'></span> {name}
+                    <span class='status-dot green'></span> {name}{so_badge_html}
                 </h2>
                 <div style='display: flex; flex-wrap: wrap; gap: 20px; margin-bottom: 20px;'>
                     {resumo_card_html}
@@ -920,10 +1024,11 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
             </div>
             """)
 
+            tab_so = f"<td style='color:{_cor_so}; font-size:13px; white-space:nowrap;'>{_ic} {_so_label}</td>"
             linhas_tabela_resumo.append(
                 f"<tr><td><span class='status-dot green'></span></td>"
                 f"<td><a href='#vm_{hid}' style='color:#00e5ff; font-weight:bold; text-decoration:none; transition: color 0.3s;' onmouseover=\"this.style.color='#ffffff'\" onmouseout=\"this.style.color='#00e5ff'\">{name}</a></td>"
-                f"{tab_resumo}</tr>"
+                f"{tab_so}{tab_resumo}</tr>"
             )
 
         analise_texto = "A infraestrutura operou dentro dos limites normais de estabilidade. "
@@ -956,7 +1061,7 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
             {analise_texto}
         </div>
 
-        <table class='summary-table'><thead><tr><th>Status</th><th>Máquina Virtual (Clique para Detalhes)</th><th>Métricas Médias no Período</th></tr></thead>
+        <table class='summary-table'><thead><tr><th>Status</th><th>Máquina Virtual (Clique para Detalhes)</th><th>Sistema Operacional</th><th>Métricas Médias no Período</th></tr></thead>
         <tbody>{"".join(linhas_tabela_resumo)}</tbody></table>
 
         <h2 style='color:#00e5ff; margin-top:50px; margin-bottom:20px; text-align:center; font-size: 28px;'>Análise de Capacity (AI) e Gráficos por Servidor</h2>
@@ -1026,3 +1131,172 @@ def _coletar_hosts_e_itens(token, grupo, url=None):
             "output": ["itemid", "hostid", "name", "value_type", "units", "key_", "lastvalue", "lastclock"]
         }, token, url))
     return hosts, items
+
+
+def _fmt_ram_bytes(lv):
+    """Formata um lastvalue de RAM total (em bytes) para GB/MB legível."""
+    try:
+        b = float(lv)
+    except (TypeError, ValueError):
+        return None
+    if b <= 0:
+        return None
+    if b >= 1073741824:
+        return f"{b/1073741824:.0f} GB"
+    if b >= 1048576:
+        return f"{b/1048576:.0f} MB"
+    return f"{b:.0f} B"
+
+
+def montar_inventario_para_ia(token, grupo, url=None):
+    """Monta um INVENTÁRIO textual, ao vivo, de todas as VMs/hosts do grupo do
+    usuário, para ALIMENTAR A IA DO CHAT. É o que permite o Oráculo responder
+    perguntas como:
+        - "Quais servidores são Windows?" (coluna Sistema Operacional)
+        - "Quantas vCPUs tem cada VM?" (coluna vCPUs)
+        - "Qual VM está consumindo mais CPU agora?" (coluna CPU agora)
+        - "Tem algum gargalo no ambiente?" (CPU/memória/disco altos)
+
+    Usa SOMENTE lastvalue (valor mais recente já coletado) — é rápido e leve,
+    NÃO dispara history.get/trend.get, ao contrário do relatório FinOps. Assim
+    pode rodar a cada mensagem do chat sem pesar. Respeita o multi-tenant: nunca
+    sai do grupo/conta do usuário.
+
+    Devolve uma string pronta para o contexto da IA, ou '' se não houver hosts.
+    Nunca levanta exceção para fora (o chat não pode quebrar por causa disso)."""
+    try:
+        filtro = {}
+        if grupo and grupo != "GLOBAL":
+            g_res = zabbix_api("hostgroup.get", {"search": {"name": grupo}}, token, url)
+            if g_res:
+                filtro["groupids"] = g_res[0].get('groupid')
+
+        hosts = zabbix_api("host.get", {"output": ["hostid", "name"], **filtro}, token, url)
+        if not hosts:
+            return ""
+
+        host_ids = [h['hostid'] for h in hosts]
+        nome_por_host = {h['hostid']: h['name'] for h in hosts}
+
+        # SO (texto) — coleta dedicada (reaproveitada do relatório).
+        so_por_host = coletar_so_por_host(host_ids, token, url)
+
+        # Métricas numéricas (lastvalue) de todos os hosts.
+        items = []
+        for lote in _chunks(host_ids, 20):
+            items.extend(zabbix_api("item.get", {
+                "hostids": lote,
+                "filter": {"status": "0", "value_type": ["0", "3"]},
+                "output": ["itemid", "hostid", "name", "key_", "units", "lastvalue"]
+            }, token, url))
+
+        dados = {hid: {'vcpu': None, 'ram': None, 'cpu_uso': None,
+                       'mem_uso': None, 'disks': {}} for hid in host_ids}
+
+        def _num(lv):
+            try:
+                return float(lv)
+            except (TypeError, ValueError):
+                return None
+
+        def _melhor_uso(atual, novo_val):
+            # Mantém o MAIOR uso atual quando o host tem vários itens do mesmo
+            # tipo (ex.: CPU por core + CPU total) — o pior caso é o que importa
+            # para responder "quem está sobrecarregado".
+            if novo_val is None:
+                return atual
+            if atual is None or novo_val > atual:
+                return novo_val
+            return atual
+
+        # Sinais mais tolerantes que o do relatório: os templates OFICIAIS do
+        # Zabbix usam "CPU utilization" e "Number of CPUs" — que os \bnum\b/\butil\b
+        # estritos não pegavam. Aqui usamos prefixos (utiliz, núcleo) e, acima de
+        # tudo, a UNIDADE '%' como sinal forte de "isto é uso percentual".
+        _USO_REGEX = re.compile(r'(uso|usage|utiliz|util|percent|carga|load|ocupa)', re.IGNORECASE)
+        _CORE_REGEX = re.compile(r'(núcleo|nucleo|core|cores|number|númer|numer|\bnum\b|count|quantidade|vcpu)', re.IGNORECASE)
+
+        for it in items:
+            hid = it.get('hostid')
+            if hid not in dados:
+                continue
+            nl = (it.get('name') or '').lower()
+            ul = (it.get('units') or '').lower()
+            lv = it.get('lastvalue')
+            eh_percentual = ('%' in ul) or bool(_USO_REGEX.search(nl))
+            eh_cpu = 'cpu' in nl or 'processad' in nl or 'núcleo' in nl or 'nucleo' in nl
+            eh_mem = bool(re.search(r'\b(mem|memória|memoria|memory|ram)\b', nl))
+
+            # Uso atual de CPU (%): unidade % OU nome de "uso/utilization".
+            if eh_cpu and eh_percentual and not _CORE_REGEX.search(nl):
+                dados[hid]['cpu_uso'] = _melhor_uso(dados[hid]['cpu_uso'], _num(lv))
+            # vCPUs alocadas (contagem de núcleos) — nunca percentual.
+            elif eh_cpu and (not eh_percentual) and _CORE_REGEX.search(nl):
+                n = _num(lv)
+                if n is not None and 0 < n < 4096:
+                    dados[hid]['vcpu'] = int(n)
+            # Uso atual de memória (%).
+            elif eh_mem and eh_percentual and 'total' not in nl:
+                dados[hid]['mem_uso'] = _melhor_uso(dados[hid]['mem_uso'], _num(lv))
+            # RAM total (bytes).
+            elif eh_mem and 'total' in nl and 'uso' not in nl and not eh_percentual:
+                ram = _fmt_ram_bytes(lv)
+                if ram:
+                    dados[hid]['ram'] = ram
+            else:
+                # Uso de disco por partição (% usado), via chave técnica.
+                mount, kind = _parse_disk_key(it.get('key_', ''))
+                if mount and kind in ('pused', 'pfree'):
+                    ident = _norm_mount(mount)
+                    if ident and not DISCOS_BLOQUEADOS_REGEX.search(mount):
+                        v = _num(lv)
+                        if v is not None:
+                            usado = v if kind == 'pused' else max(0.0, 100.0 - v)
+                            # fica com o maior uso visto para aquela partição
+                            ant = dados[hid]['disks'].get(ident)
+                            if ant is None or usado > ant:
+                                dados[hid]['disks'][ident] = usado
+
+        # ---- Monta o texto do inventário ----
+        n_win = n_lin = n_outro = 0
+        linhas = []
+        for h in hosts:
+            hid, name = h['hostid'], h['name']
+            d = dados[hid]
+            so = so_por_host.get(hid) or "SO não informado"
+            familia = classificar_familia_so(so)
+            if familia == 'Windows':
+                n_win += 1
+            elif familia == 'Linux':
+                n_lin += 1
+            else:
+                n_outro += 1
+
+            vcpu = f"{d['vcpu']}" if d['vcpu'] is not None else "n/d"
+            ram = d['ram'] or "n/d"
+            cpu = f"{d['cpu_uso']:.0f}%" if d['cpu_uso'] is not None else "n/d"
+            mem = f"{d['mem_uso']:.0f}%" if d['mem_uso'] is not None else "n/d"
+            if d['disks']:
+                disco = ", ".join(f"{mp} {pct:.0f}%" for mp, pct in sorted(d['disks'].items()))
+            else:
+                disco = "n/d"
+
+            linhas.append(
+                f"| {name} | {so} | {vcpu} | {ram} | {cpu} | {mem} | {disco} |"
+            )
+
+        total = len(hosts)
+        cabecalho = (
+            "\n--- INVENTÁRIO DETALHADO DAS VMs (dados AO VIVO do Zabbix — lastvalue) ---\n"
+            f"Total de hosts/VMs: {total} | Windows: {n_win} | Linux: {n_lin} | Outros/indefinidos: {n_outro}\n"
+            "Colunas: VM | Sistema Operacional | vCPUs alocadas | RAM total | CPU agora | Memória agora | Disco usado por partição\n"
+            "('n/d' = a métrica não é monitorada para essa VM no Zabbix)\n\n"
+            "| VM | Sistema Operacional | vCPUs | RAM | CPU agora | Memória agora | Disco |\n"
+            "|----|--------------------|-------|-----|-----------|---------------|-------|\n"
+        )
+        return cabecalho + "\n".join(linhas) + "\n"
+
+    except Exception as e:
+        # Enriquecimento opcional: se falhar, o chat segue com o contexto básico.
+        print(f"[zabbix] Aviso: falha ao montar inventário para a IA: {e}")
+        return ""
