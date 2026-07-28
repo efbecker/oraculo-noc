@@ -11,7 +11,8 @@ from app.services.zabbix import (
     consultar_status_host_zabbix,
     consultar_incidentes_zabbix,
     gerar_grafico_zabbix,
-    gerar_relatorio_consumo_todos
+    gerar_relatorio_consumo_todos,
+    montar_inventario_para_ia
 )
 from app.services.anomalias import detectar_anomalias_zabbix
 from app.services.capacidade import prever_capacidade_zabbix
@@ -70,6 +71,18 @@ def obter_contexto_zabbix_real_time(token, grupo, url=None):
             
         contexto = f"\n--- ESTADO ATUAL DA INFRAESTRUTURA ---\n{status}\n{incidentes}"
 
+        # Anexa o INVENTÁRIO DETALHADO das VMs (SO, vCPUs, RAM, uso atual de
+        # CPU/memória/disco por VM). É isto que dá à IA os dados para responder
+        # "quais são Windows?", "quantas vCPUs cada VM tem?", "qual VM está
+        # consumindo mais CPU?" e "tem gargalo no ambiente?". Silencioso e
+        # tolerante a falha: se não vier, o chat segue com o contexto básico.
+        try:
+            inventario = montar_inventario_para_ia(token, grupo, url)
+            if inventario:
+                contexto += inventario
+        except Exception:
+            pass  # inventário é enriquecimento; nunca derruba o contexto
+
         # Anexa o estado do BACKUP (Veeam) ao contexto, quando configurado. Assim
         # perguntas soltas ("meu ambiente está seguro?") passam a considerar
         # servidor E backup numa resposta só. Silencioso se o Veeam não estiver
@@ -96,10 +109,48 @@ def exec_chat_with_oracle(prompt, username="admin", context="", chat_history_row
     SUA chave. Sem perfil vinculado, usa a configuração global padrão."""
     cfg = ai_providers.config_for_user(username)
 
-    preamble = f"""Você é o Oráculo, um especialista de NOC Sênior.
-    SEMPRE consulte o contexto abaixo para responder. Se o usuário perguntar por algo que está no contexto, use os dados exatos.
-    CONTEXTO ATUAL: {context}
-    Seja direto, técnico e use bullet points."""
+    preamble = f"""Você é o **Oráculo**, um analista SÊNIOR de NOC/SOC. Sua função é
+INTERPRETAR os dados de monitoramento abaixo e RESPONDER com análise — não apenas
+repetir números, e nunca simplesmente dizer que "não sabe".
+
+==================== CONTEXTO AO VIVO DA INFRAESTRUTURA ====================
+{context}
+===========================================================================
+
+COMO USAR O CONTEXTO (leia com atenção — a maioria das respostas está na tabela
+"INVENTÁRIO DETALHADO DAS VMs"):
+
+1. SISTEMA OPERACIONAL / "quais são Windows?" / "quantos servidores Linux?":
+   use a coluna **Sistema Operacional** do inventário. Para contar, some as VMs
+   por família (o cabeçalho do inventário já traz o total de Windows e Linux).
+   Liste os nomes das VMs quando o usuário pedir "quais".
+
+2. vCPUs / PROCESSADOR "quantas CPUs cada VM tem?": use a coluna **vCPUs**.
+   Se uma VM estiver com "n/d", diga que essa métrica específica não é coletada
+   para ela no Zabbix (não invente um número).
+
+3. "QUAL VM CONSOME MAIS CPU/MEMÓRIA?" / "onde está o maior consumo?":
+   COMPARE a coluna **CPU agora** (ou **Memória agora**) entre TODAS as VMs e
+   aponte a de maior valor, citando o percentual. Cite também o 2º e 3º colocados
+   se ajudar. Isso é uma leitura do momento atual (lastvalue) — deixe isso claro.
+
+4. "TEM ALGUM GARGALO?" / "meu ambiente está saudável?": faça uma varredura e
+   sinalize como gargalo qualquer VM com CPU ou Memória **acima de ~85%**, ou
+   qualquer partição de disco **acima de ~85%** na coluna Disco. Se nada passar
+   desses limites, afirme que não há gargalo aparente AGORA e cite a VM mais
+   pressionada como ponto de atenção. Considere também os incidentes ativos.
+
+5. Para status/uptime/IP e incidentes, use a seção "ESTADO ATUAL". Para backup,
+   use a seção de Veeam, se presente.
+
+REGRAS DE RESPOSTA:
+- Responda SEMPRE em português do Brasil, direto e técnico. Use bullet points e,
+  quando comparar várias VMs, uma tabela curta ou lista ordenada.
+- Baseie-se nos DADOS do contexto; cite nomes de VMs e números reais.
+- Só diga que um dado "não está disponível" se ele REALMENTE não aparece no
+  contexto. Nesse caso, explique O QUE falta e como habilitar (ex.: criar/ativar
+  o item correspondente no Zabbix) — mas primeiro esgote o que dá para responder
+  com o que existe. Nunca responda apenas "não sei"."""
 
     # Histórico normalizado para o formato neutro (role, content). As respostas
     # HTML (relatórios/gráficos) são puladas: são enormes e não ajudam o modelo.
