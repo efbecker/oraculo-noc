@@ -57,10 +57,28 @@ CREATE TABLE IF NOT EXISTS scans (
     session_id   TEXT
 );
 
+-- Relatórios FinOps/Consumo: apenas METADADOS no banco. O HTML fica em disco
+-- privado (instance/reports/), servido por rota autenticada com checagem de
+-- tenant (ver app/services/report_store.py). Guardamos o ponteiro (arquivo) e o
+-- escopo (grupo_cliente) para controle de acesso — nunca o blob, para não inchar
+-- o banco. 'expira_ts' controla a retenção (limpeza automática).
+CREATE TABLE IF NOT EXISTS reports (
+    id             TEXT PRIMARY KEY,   -- token aleatório inadivinhável (vai na URL)
+    grupo_cliente  TEXT,               -- tenant dono do relatório
+    criado_por     TEXT,               -- username que gerou
+    titulo         TEXT,
+    arquivo        TEXT,               -- nome do arquivo em instance/reports/
+    tamanho        INTEGER,            -- bytes
+    criado_em      TEXT,               -- data/hora legível (exibição)
+    criado_ts      REAL,               -- epoch (ordenação)
+    expira_ts      REAL                -- epoch de expiração (retenção)
+);
+
 -- Índices das consultas mais frequentes.
 CREATE INDEX IF NOT EXISTS idx_chat_hist_user_sess ON chat_history(username, session_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_user       ON chat_sessions(username, created_ts);
 CREATE INDEX IF NOT EXISTS idx_scans_owner_status  ON scans(owner, status);
+CREATE INDEX IF NOT EXISTS idx_reports_grupo_ts    ON reports(grupo_cliente, criado_ts);
 
 -- NOTA: a tabela de histórico de backups NÃO vive aqui — ela fica num SQLite
 -- dedicado (app/services/backup_manager.py), separada de propósito para que
