@@ -158,6 +158,34 @@ def coletar_so_por_host(host_ids, token, url=None):
 STATIC_DIR = os.path.join(os.getcwd(), 'app', 'static')
 os.makedirs(STATIC_DIR, exist_ok=True)
 
+# --------------------------------------------------------------------------
+# PARÂMETROS DO CLUSTER / LAYOUT
+# --------------------------------------------------------------------------
+# No cluster VMware do cliente, cada vCPU equivale a 2 GHz de clock. É essa a
+# base para calcular o % de uso de CPU: uso_GHz / (nº_vCPU * 2 GHz) * 100.
+# Se o padrão do cluster mudar, basta ajustar aqui.
+GHZ_POR_VCPU = 2.0
+
+# Quantos "donuts" de disco cabem por LINHA no gráfico da VM. Acima disso o
+# relatório quebra em várias linhas — antes tudo ia numa linha só e, com muitos
+# discos, os nomes (ex.: /var/www/client4/web8/log) se sobrepunham/borravam.
+DISCOS_POR_LINHA = 4
+
+
+def _titulo_disco_curto(mount, limite=22):
+    """Encurta nomes de ponto de montagem muito longos para o TÍTULO do donut,
+    preservando o FINAL (a parte que distingue /.../web1/log de /.../web8/log).
+    Ex.: '/var/www/client4/web8/log' -> '…/web8/log'. Discos curtos (C:, /boot)
+    passam intactos. Só afeta o rótulo exibido; a chave real do disco é mantida
+    nos insights e no resumo."""
+    if not mount or len(mount) <= limite:
+        return mount
+    cauda = mount[-(limite - 1):]
+    corte = cauda.find('/')
+    if 0 < corte < len(cauda) - 1:
+        cauda = cauda[corte:]
+    return '…' + cauda
+
 # A MÁGICA COMEÇA AQUI: Recebe a URL do cliente, se não tiver, usa a padrão
 def _chunks(lista, tamanho):
     """Divide uma lista em pedaços menores — usado pra não mandar UMA chamada
@@ -798,7 +826,10 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
             # do host (antes só entravam os 4 primeiros — era por isso que um
             # disco a mais, como o "S:", nunca aparecia no relatório).
             n_disks = len(h_it['disks']) if not is_fgt else 0
-            disk_rows = 1 if n_disks > 0 else 0
+            # Discos em GRADE (várias linhas) em vez de uma única linha: com muitos
+            # discos, uma linha só espremia os donuts e sobrepunha os nomes.
+            disk_cols = min(n_disks, DISCOS_POR_LINHA) if n_disks > 0 else 0
+            disk_rows = math.ceil(n_disks / DISCOS_POR_LINHA) if n_disks > 0 else 0
             total_rows = max(1, line_rows + disk_rows)
 
             fig = Figure(figsize=(14, 4.5 * total_rows), facecolor='#1e1e1e')
@@ -917,9 +948,16 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
 
             disk_summaries = []
             if n_disks > 0 and not is_fgt:
-                gs_disk = gs[line_rows].subgridspec(1, n_disks, wspace=0.3)
+                # Uma subgrade (1 x disk_cols) por linha de discos. Assim os donuts
+                # ficam alinhados numa grade e cada um tem largura suficiente para
+                # o nome não sobrepor o vizinho.
+                gs_disk_por_linha = {
+                    r: gs[line_rows + r].subgridspec(1, disk_cols, wspace=0.45)
+                    for r in range(disk_rows)
+                }
                 for i, grupo_disco in enumerate(h_it['disks']):
-                    ax_d = fig.add_subplot(gs_disk[0, i])
+                    r, c = divmod(i, disk_cols)
+                    ax_d = fig.add_subplot(gs_disk_por_linha[r][0, c])
                     ax_d.set_facecolor('#1e1e1e')
 
                     used_pct = _calcular_uso_disco(grupo_disco['items'])
@@ -933,11 +971,12 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
                     texto_central = f'{used_pct:.1f}%' if not sem_dado else 's/ dado'
                     ax_d.text(0, 0, texto_central, ha='center', va='center', fontsize=13 if not sem_dado else 10, fontweight='bold', color='#ffffff')
 
-                    # Título = SEMPRE o mount técnico (chave do Zabbix), nunca o nome
-                    # do item — é por isso que fica limpo e consistente em qualquer
-                    # idioma/template: "/", "/boot", "C:", "D:"...
+                    # Título = mount técnico (chave do Zabbix), mas ENCURTADO no
+                    # rótulo quando for um caminho longo — preservando o final, que
+                    # é o que diferencia /.../web1/log de /.../web8/log. O insight
+                    # de disco cheio (abaixo) continua usando o mount COMPLETO.
                     n_amigavel = grupo_disco['mount']
-                    ax_d.set_title(n_amigavel, fontsize=12, fontweight='bold', pad=20, color='#e0e0e0')
+                    ax_d.set_title(_titulo_disco_curto(n_amigavel), fontsize=11, fontweight='bold', pad=16, color='#e0e0e0')
 
                     if not sem_dado and used_pct > 85:
                         insights_finops.append(f"🚨 <b>Disco ({n_amigavel}):</b> Volume crítico (> 85%). Expansão recomendada.")
@@ -1190,8 +1229,10 @@ def montar_inventario_para_ia(token, grupo, url=None):
                 "output": ["itemid", "hostid", "name", "key_", "units", "lastvalue"]
             }, token, url))
 
-        dados = {hid: {'vcpu': None, 'ram': None, 'cpu_uso': None,
-                       'mem_uso': None, 'disks': {}} for hid in host_ids}
+        dados = {hid: {'vcpu': None, 'ram': None, 'ram_bytes': None,
+                       'cpu_ghz': None, 'cpu_pct_direto': None,
+                       'mem_vm': None, 'mem_generico': None,
+                       'disks': {}} for hid in host_ids}
 
         def _num(lv):
             try:
@@ -1209,12 +1250,36 @@ def montar_inventario_para_ia(token, grupo, url=None):
                 return novo_val
             return atual
 
+        def _cpu_consumo_ghz(units, val):
+            """Converte o valor de CONSUMO de CPU para GHz. No VMware o item de
+            uso de CPU vem em Hz (ex.: 1.953.000.000 = 1,953 GHz) — era isso que
+            aparecia como '1.953.000.000%'. Devolve GHz consumido, ou None se o
+            valor for pequeno demais para ser consumo em frequência (nesse caso
+            provavelmente já é um percentual pronto)."""
+            if val is None:
+                return None
+            u = (units or '').lower()
+            if 'ghz' in u:
+                return val
+            if 'mhz' in u:
+                return val / 1e3
+            if 'hz' in u:
+                return val / 1e9
+            # Sem unidade de frequência clara: decide pela ordem de grandeza.
+            if val >= 1e6:
+                return val / 1e9    # Hz
+            if val >= 1e3:
+                return val / 1e3    # provavelmente MHz
+            return None             # valor baixo: tratamos como % pronto
+
         # Sinais mais tolerantes que o do relatório: os templates OFICIAIS do
         # Zabbix usam "CPU utilization" e "Number of CPUs" — que os \bnum\b/\butil\b
-        # estritos não pegavam. Aqui usamos prefixos (utiliz, núcleo) e, acima de
-        # tudo, a UNIDADE '%' como sinal forte de "isto é uso percentual".
+        # estritos não pegavam. Aqui usamos prefixos (utiliz, núcleo) e a UNIDADE.
         _USO_REGEX = re.compile(r'(uso|usage|utiliz|util|percent|carga|load|ocupa)', re.IGNORECASE)
         _CORE_REGEX = re.compile(r'(núcleo|nucleo|core|cores|number|númer|numer|\bnum\b|count|quantidade|vcpu)', re.IGNORECASE)
+        # Item de memória preferido pelo cliente: "Uso de memória da VM" — é o que
+        # reflete melhor o uso real dentro do SO (o % genérico do VMware diverge).
+        _MEM_VM_REGEX = re.compile(r'uso\s+de\s+mem', re.IGNORECASE)
 
         for it in items:
             hid = it.get('hostid')
@@ -1223,36 +1288,45 @@ def montar_inventario_para_ia(token, grupo, url=None):
             nl = (it.get('name') or '').lower()
             ul = (it.get('units') or '').lower()
             lv = it.get('lastvalue')
+            val = _num(lv)
+            eh_freq = 'hz' in ul                       # hz / mhz / ghz / khz
             eh_percentual = ('%' in ul) or bool(_USO_REGEX.search(nl))
             eh_cpu = 'cpu' in nl or 'processad' in nl or 'núcleo' in nl or 'nucleo' in nl
             eh_mem = bool(re.search(r'\b(mem|memória|memoria|memory|ram)\b', nl))
+            eh_core = bool(_CORE_REGEX.search(nl))
 
-            # Uso atual de CPU (%): unidade % OU nome de "uso/utilization".
-            if eh_cpu and eh_percentual and not _CORE_REGEX.search(nl):
-                dados[hid]['cpu_uso'] = _melhor_uso(dados[hid]['cpu_uso'], _num(lv))
-            # vCPUs alocadas (contagem de núcleos) — nunca percentual.
-            elif eh_cpu and (not eh_percentual) and _CORE_REGEX.search(nl):
-                n = _num(lv)
-                if n is not None and 0 < n < 4096:
-                    dados[hid]['vcpu'] = int(n)
-            # Uso atual de memória (%).
-            elif eh_mem and eh_percentual and 'total' not in nl:
-                dados[hid]['mem_uso'] = _melhor_uso(dados[hid]['mem_uso'], _num(lv))
-            # RAM total (bytes).
+            # vCPUs alocadas (contagem de núcleos) — nunca é frequência nem %.
+            if eh_cpu and eh_core and not eh_freq and '%' not in ul:
+                if val is not None and 0 < val < 4096:
+                    dados[hid]['vcpu'] = int(val)
+            # Consumo de CPU (Hz/MHz/GHz) OU % pronto de CPU.
+            elif eh_cpu and not eh_core and (eh_freq or eh_percentual):
+                ghz = _cpu_consumo_ghz(ul, val)
+                if ghz is not None:
+                    dados[hid]['cpu_ghz'] = _melhor_uso(dados[hid]['cpu_ghz'], ghz)
+                elif val is not None and val <= 100:
+                    dados[hid]['cpu_pct_direto'] = _melhor_uso(dados[hid]['cpu_pct_direto'], val)
+            # Memória preferida do cliente: "Uso de memória da VM".
+            elif eh_mem and _MEM_VM_REGEX.search(nl):
+                if val is not None:
+                    dados[hid]['mem_vm'] = _melhor_uso(dados[hid]['mem_vm'], val)
+            # RAM total (bytes) — para exibir e, se preciso, calcular % de bytes.
             elif eh_mem and 'total' in nl and 'uso' not in nl and not eh_percentual:
-                ram = _fmt_ram_bytes(lv)
-                if ram:
-                    dados[hid]['ram'] = ram
+                if val is not None and val > 0:
+                    dados[hid]['ram_bytes'] = val
+                    dados[hid]['ram'] = _fmt_ram_bytes(val)
+            # Uso genérico de memória (%) — fallback se não houver o item preferido.
+            elif eh_mem and eh_percentual and 'total' not in nl:
+                if val is not None:
+                    dados[hid]['mem_generico'] = _melhor_uso(dados[hid]['mem_generico'], val)
             else:
                 # Uso de disco por partição (% usado), via chave técnica.
                 mount, kind = _parse_disk_key(it.get('key_', ''))
                 if mount and kind in ('pused', 'pfree'):
                     ident = _norm_mount(mount)
                     if ident and not DISCOS_BLOQUEADOS_REGEX.search(mount):
-                        v = _num(lv)
-                        if v is not None:
-                            usado = v if kind == 'pused' else max(0.0, 100.0 - v)
-                            # fica com o maior uso visto para aquela partição
+                        if val is not None:
+                            usado = val if kind == 'pused' else max(0.0, 100.0 - val)
                             ant = dados[hid]['disks'].get(ident)
                             if ant is None or usado > ant:
                                 dados[hid]['disks'][ident] = usado
@@ -1274,8 +1348,28 @@ def montar_inventario_para_ia(token, grupo, url=None):
 
             vcpu = f"{d['vcpu']}" if d['vcpu'] is not None else "n/d"
             ram = d['ram'] or "n/d"
-            cpu = f"{d['cpu_uso']:.0f}%" if d['cpu_uso'] is not None else "n/d"
-            mem = f"{d['mem_uso']:.0f}%" if d['mem_uso'] is not None else "n/d"
+
+            # ---- CPU: % baseado em GHz (cada vCPU = 2 GHz no cluster) ----
+            cap_ghz = (d['vcpu'] * GHZ_POR_VCPU) if d['vcpu'] else None
+            if d['cpu_ghz'] is not None and cap_ghz:
+                pct = min(100.0, max(0.0, d['cpu_ghz'] / cap_ghz * 100.0))
+                cpu = f"{pct:.0f}% ({d['cpu_ghz']:.2f} de {cap_ghz:.0f} GHz)"
+            elif d['cpu_pct_direto'] is not None:
+                cpu = f"{d['cpu_pct_direto']:.0f}%"
+            elif d['cpu_ghz'] is not None:
+                # Temos o consumo, mas não a contagem de vCPU para calcular o %.
+                cpu = f"{d['cpu_ghz']:.2f} GHz (vCPU n/d)"
+            else:
+                cpu = "n/d"
+
+            # ---- Memória: prioriza o item "Uso de memória da VM" ----
+            mem_val = d['mem_vm']
+            if mem_val is not None and mem_val > 100 and d['ram_bytes']:
+                mem_val = min(100.0, mem_val / d['ram_bytes'] * 100.0)
+            if mem_val is None:
+                mem_val = d['mem_generico']  # fallback
+            mem = f"{mem_val:.0f}%" if mem_val is not None else "n/d"
+
             if d['disks']:
                 disco = ", ".join(f"{mp} {pct:.0f}%" for mp, pct in sorted(d['disks'].items()))
             else:
@@ -1290,6 +1384,9 @@ def montar_inventario_para_ia(token, grupo, url=None):
             "\n--- INVENTÁRIO DETALHADO DAS VMs (dados AO VIVO do Zabbix — lastvalue) ---\n"
             f"Total de hosts/VMs: {total} | Windows: {n_win} | Linux: {n_lin} | Outros/indefinidos: {n_outro}\n"
             "Colunas: VM | Sistema Operacional | vCPUs alocadas | RAM total | CPU agora | Memória agora | Disco usado por partição\n"
+            f"Base do cálculo de CPU: cada vCPU = {GHZ_POR_VCPU:.0f} GHz no cluster VMware; "
+            "'CPU agora' = GHz consumidos / (vCPUs × 2 GHz) × 100. Memória vem do item "
+            "'Uso de memória da VM' (o mais fiel ao uso real dentro do SO).\n"
             "('n/d' = a métrica não é monitorada para essa VM no Zabbix)\n\n"
             "| VM | Sistema Operacional | vCPUs | RAM | CPU agora | Memória agora | Disco |\n"
             "|----|--------------------|-------|-----|-----------|---------------|-------|\n"
