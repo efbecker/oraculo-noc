@@ -199,7 +199,16 @@ def serve_finops_report(report_id):
     privado (instance/reports/) e só é entregue se o usuário logado pertencer ao
     mesmo grupo do relatório (ou for administrador)."""
     row = report_store.obter_relatorio(report_id)
-    if not row or not row.get('caminho') or not os.path.isfile(row['caminho']):
+    if not row:
+        return "Relatório não disponível ou expirado.", 404
+
+    # SecOps não tem arquivo próprio: o conteúdo vive em scans.result_json e é
+    # servido pela rota já existente (/api/download/<scan_id>), que faz sua
+    # própria checagem de dono/admin. Aqui só redirecionamos para ela.
+    if row.get('tipo') == 'secops' and row.get('ref'):
+        return redirect(url_for('chat.download_report', scan_id=row['ref']))
+
+    if not row.get('caminho') or not os.path.isfile(row['caminho']):
         return "Relatório não disponível ou expirado.", 404
 
     if not report_store.usuario_pode_acessar(
