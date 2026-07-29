@@ -20,6 +20,8 @@ import sqlite3
 import logging
 import threading
 import subprocess
+import io
+import tarfile
 from datetime import datetime
 
 from app import db
@@ -148,6 +150,80 @@ def _aplicar_retencao(retention):
         logger.warning(f"[Backup] Falha ao aplicar retenção: {e}")
 
 
+# ==========================================================================
+# CONFIGURAÇÕES FORA DO BANCO (viajam junto no backup)
+# --------------------------------------------------------------------------
+# Boa parte da configuração do produto NÃO fica no banco, e sim em arquivos
+# JSON em instance/: a IA (global + perfis por cliente), o Veeam (conexão +
+# mapeamento) e o logo do Branding. Antes, o backup só levava o banco — por
+# isso uma instalação nova restaurava usuários e histórico, mas "perdia" a
+# configuração de IA/Veeam/logo. Agora o backup é um PACOTE (.tar.gz) que
+# inclui o dump do banco E essas configs.
+#
+# NÃO incluímos backup_config.json (agendamento) de propósito: o horário de
+# backup é característica de cada servidor, e restaurá-lo faria uma máquina
+# nova adotar o agendamento da origem sem querer.
+def _itens_de_config():
+    """(caminho_absoluto, nome_dentro_do_pacote) de cada config existente."""
+    itens = []
+    for nome in ('ai_config.json', 'ai_profiles.json',
+                 'veeam_config.json', 'veeam_map.json'):
+        p = os.path.join(db.INSTANCE_DIR, nome)
+        if os.path.isfile(p):
+            itens.append((p, 'config/' + nome))
+    branding_dir = os.path.join(db.INSTANCE_DIR, 'branding')
+    if os.path.isdir(branding_dir):
+        for raiz, _dirs, arquivos in os.walk(branding_dir):
+            for a in arquivos:
+                full = os.path.join(raiz, a)
+                rel = os.path.relpath(full, db.INSTANCE_DIR).replace(os.sep, '/')
+                itens.append((full, 'config/' + rel))
+    return itens
+
+
+def _montar_pacote(db_dump_path, db_arcname, engine, dest):
+    """Empacota (tar.gz) o dump do banco + as configs num único arquivo, com
+    um manifest para o restore saber o motor de origem. chmod 600 porque o
+    pacote contém segredos (chaves de API, senha do Veeam)."""
+    manifest = {
+        "format": 2,
+        "app": "oraculo",
+        "engine": engine,
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    manifest_bytes = json.dumps(manifest, indent=2).encode('utf-8')
+    with tarfile.open(dest, "w:gz") as tar:
+        info = tarfile.TarInfo("manifest.json")
+        info.size = len(manifest_bytes)
+        info.mtime = int(time.time())
+        tar.addfile(info, io.BytesIO(manifest_bytes))
+        tar.add(db_dump_path, arcname="database/" + db_arcname)
+        for full, arc in _itens_de_config():
+            tar.add(full, arcname=arc)
+    try:
+        os.chmod(dest, 0o600)
+    except Exception:
+        pass
+
+
+def _ler_manifest_pacote(path):
+    """Se 'path' for um pacote de backup (tar com manifest.json), devolve o
+    manifest (dict). Caso contrário devolve None — é um backup 'cru' antigo
+    (.db / .sql.gz), tratado pelo caminho de compatibilidade."""
+    try:
+        if not tarfile.is_tarfile(path):
+            return None
+        with tarfile.open(path, "r:*") as tar:
+            try:
+                membro = tar.getmember("manifest.json")
+            except KeyError:
+                return None
+            dados = tar.extractfile(membro).read()
+        return json.loads(dados.decode('utf-8'))
+    except Exception:
+        return None
+
+
 def run_backup_now():
     """Executa um backup imediatamente (chamado pelo agendador OU pelo botão
     'Rodar agora' do painel). Retorna dict com o resultado."""
@@ -156,29 +232,32 @@ def run_backup_now():
     # Microssegundos + sufixo aleatório: garante que o nome do arquivo NUNCA
     # colide, mesmo quando dois backups acontecem no mesmo segundo (ex.: o
     # backup de segurança automático disparado logo antes de uma restauração).
-    # Uma colisão de nome faria um backup SOBRESCREVER o outro silenciosamente.
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f") + "_" + uuid.uuid4().hex[:6]
     engine = "postgres" if db.is_postgres() else "sqlite"
 
+    # Área temporária: primeiro geramos o dump do banco, depois empacotamos
+    # (dump + configs) num único .tar.gz.
+    tmpdir = os.path.join(BACKUP_DIR, f"_pkg_tmp_{uuid.uuid4().hex}")
+    os.makedirs(tmpdir, exist_ok=True)
+
     try:
         if engine == "sqlite":
-            dest = os.path.join(BACKUP_DIR, f"oraculo_sqlite_{stamp}.db")
+            db_dump = os.path.join(tmpdir, "oraculo.db")
+            db_arcname = "oraculo.db"
             # Usa a API de backup do sqlite3 (segura com o banco em uso — não é
             # uma simples cópia de arquivo, que arriscaria pegar o .db no meio
             # de uma escrita).
             src_conn = sqlite3.connect(db.DB_PATH)
-            dst_conn = sqlite3.connect(dest)
+            dst_conn = sqlite3.connect(db_dump)
             with dst_conn:
                 src_conn.backup(dst_conn)
             src_conn.close()
             dst_conn.close()
-            size = os.path.getsize(dest)
-            _registrar(started_at, engine, "ok", size, dest, "Backup SQLite concluído.")
-            resultado = {"status": "ok", "file": dest, "size": size}
 
         else:
             cfg = db._pg_conn_kwargs()
-            dest = os.path.join(BACKUP_DIR, f"oraculo_postgres_{stamp}.sql.gz")
+            db_dump = os.path.join(tmpdir, "oraculo.sql.gz")
+            db_arcname = "oraculo.sql.gz"
             env = os.environ.copy()
             env["PGPASSWORD"] = cfg.get("password") or ""
             cmd = [
@@ -189,7 +268,7 @@ def run_backup_now():
                                             # por cima de um banco que já tem as tabelas, sem erro
                                             # de "relation already exists").
             ]
-            with open(dest, "wb") as fdest:
+            with open(db_dump, "wb") as fdest:
                 import gzip
                 proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
                 with gzip.GzipFile(fileobj=fdest, mode="wb") as gz:
@@ -201,8 +280,6 @@ def run_backup_now():
                 _, stderr = proc.communicate(timeout=300)
             if proc.returncode != 0:
                 erro = stderr.decode(errors="ignore")[:500]
-                if os.path.exists(dest):
-                    os.remove(dest)
                 # Erro clássico: o pg_dump da máquina é mais ANTIGO que o servidor
                 # (ex.: cliente 15 contra servidor 17). A mensagem crua do Postgres
                 # é técnica demais; aqui traduzimos com a solução.
@@ -212,9 +289,14 @@ def run_backup_now():
                              "(ajuste o número para a versão do seu servidor).")
                 _registrar(started_at, engine, "error", 0, None, f"pg_dump falhou: {erro}")
                 return {"status": "error", "message": f"pg_dump falhou: {erro}"}
-            size = os.path.getsize(dest)
-            _registrar(started_at, engine, "ok", size, dest, "Backup PostgreSQL (pg_dump) concluído.")
-            resultado = {"status": "ok", "file": dest, "size": size}
+
+        # Empacota banco + configurações (IA, Veeam, branding) num só .tar.gz.
+        dest = os.path.join(BACKUP_DIR, f"oraculo_backup_{stamp}.tar.gz")
+        _montar_pacote(db_dump, db_arcname, engine, dest)
+        size = os.path.getsize(dest)
+        _registrar(started_at, engine, "ok", size, dest,
+                   f"Backup {engine.upper()} + configurações (pacote) concluído.")
+        resultado = {"status": "ok", "file": dest, "size": size}
 
         cfg_backup = load_config()
         _aplicar_retencao(int(cfg_backup.get("retention") or 14))
@@ -228,6 +310,8 @@ def run_backup_now():
         logger.error(f"[Backup] Falha no backup: {e}")
         _registrar(started_at, engine, "error", 0, None, str(e))
         return {"status": "error", "message": str(e)}
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def historico(limit=30):
@@ -314,11 +398,17 @@ def restore_from_file(path, origem_label, backup_engine_hint=None):
     if not os.path.exists(path):
         return {"status": "error", "message": "Arquivo de backup não encontrado."}
 
+    # Novo formato: PACOTE .tar.gz (banco + configs). O manifest diz o motor de
+    # origem. Backups antigos (arquivo .db / .sql.gz cru) => manifest None e
+    # seguem pelo caminho de compatibilidade (só banco).
+    manifest = _ler_manifest_pacote(path)
+    engine_backup = (manifest or {}).get('engine') or backup_engine_hint
+
     engine_atual = "postgres" if db.is_postgres() else "sqlite"
-    if backup_engine_hint and backup_engine_hint != engine_atual:
+    if engine_backup and engine_backup != engine_atual:
         return {
             "status": "error",
-            "message": f"Este backup foi gerado em {backup_engine_hint.upper()}, mas o sistema está "
+            "message": f"Este backup foi gerado em {engine_backup.upper()}, mas o sistema está "
                        f"configurado para {engine_atual.upper()} agora. Ajuste o motor em 'Banco de "
                        f"Dados' antes de restaurar, ou escolha outro arquivo."
         }
@@ -348,7 +438,9 @@ def restore_from_file(path, origem_label, backup_engine_hint=None):
     aviso_seguranca = "" if seguranca_ok else " ⚠️ Não foi possível confirmar o backup de segurança automático antes de restaurar."
 
     try:
-        if engine_atual == "sqlite":
+        if manifest:
+            resultado = _restore_pacote(staging_path, engine_atual)
+        elif engine_atual == "sqlite":
             resultado = _restore_sqlite(staging_path)
         else:
             resultado = _restore_postgres(staging_path)
@@ -439,3 +531,93 @@ def _restore_postgres(path):
 
     db.reset_pool()  # força conexões novas depois da restauração
     return {"status": "ok", "message": "Banco PostgreSQL restaurado com sucesso."}
+
+
+def _extrair_seguro(tar, destino):
+    """Extrai o tar validando que nenhum membro escapa da pasta de destino
+    (proteção contra path traversal em pacotes maliciosos/corrompidos, já que
+    a restauração pode vir de um upload)."""
+    base = os.path.abspath(destino)
+    for membro in tar.getmembers():
+        alvo = os.path.abspath(os.path.join(destino, membro.name))
+        if alvo != base and not alvo.startswith(base + os.sep):
+            raise ValueError(f"Entrada suspeita no pacote de backup: {membro.name}")
+    tar.extractall(destino)
+
+
+def _restaurar_configs(cfg_dir):
+    """Copia as configs do pacote (config/*) de volta para instance/,
+    preservando subpastas (ex.: branding/). JSONs voltam com chmod 600 (têm
+    segredos). Devolve a lista de itens restaurados."""
+    restauradas = []
+    if not os.path.isdir(cfg_dir):
+        return restauradas
+    for raiz, _dirs, arquivos in os.walk(cfg_dir):
+        for a in arquivos:
+            full = os.path.join(raiz, a)
+            rel = os.path.relpath(full, cfg_dir)  # ex.: ai_config.json | branding/logo.png
+            destino = os.path.join(db.INSTANCE_DIR, rel)
+            os.makedirs(os.path.dirname(destino) or db.INSTANCE_DIR, exist_ok=True)
+            shutil.copyfile(full, destino)
+            if destino.endswith('.json'):
+                try:
+                    os.chmod(destino, 0o600)
+                except Exception:
+                    pass
+            restauradas.append(rel.replace(os.sep, '/'))
+    return restauradas
+
+
+def _recarregar_config_em_memoria():
+    """Faz a IA e o Veeam relerem seus arquivos de config recém-restaurados,
+    para valerem sem precisar reiniciar o processo."""
+    try:
+        from app.services import ai_providers
+        ai_providers.reload_from_disk()
+    except Exception as e:
+        logger.warning(f"[Restore] Falha ao recarregar config de IA: {e}")
+    try:
+        from app.services import veeam
+        veeam.reload_from_disk()
+    except Exception as e:
+        logger.warning(f"[Restore] Falha ao recarregar config do Veeam: {e}")
+
+
+def _restore_pacote(bundle_path, engine_atual):
+    """Restaura um pacote .tar.gz: extrai, restaura o banco (database/*) e
+    devolve as configs (config/*) para instance/, recarregando-as em memória."""
+    tmp = os.path.join(BACKUP_DIR, f"_extract_{uuid.uuid4().hex}")
+    os.makedirs(tmp, exist_ok=True)
+    try:
+        with tarfile.open(bundle_path, "r:*") as tar:
+            _extrair_seguro(tar, tmp)
+
+        db_dir = os.path.join(tmp, "database")
+        arquivos_db = sorted(os.listdir(db_dir)) if os.path.isdir(db_dir) else []
+        if not arquivos_db:
+            return {"status": "error", "message": "Pacote de backup inválido: falta a pasta 'database'."}
+        db_dump = os.path.join(db_dir, arquivos_db[0])
+
+        # 1) Banco
+        if engine_atual == "sqlite":
+            res = _restore_sqlite(db_dump)
+        else:
+            res = _restore_postgres(db_dump)
+        if res.get("status") != "ok":
+            return res
+
+        # 2) Configurações (IA, Veeam, branding) + reload em memória
+        restauradas = _restaurar_configs(os.path.join(tmp, "config"))
+        _recarregar_config_em_memoria()
+
+        extra = ""
+        if restauradas:
+            # resumo amigável (sem listar cada arquivo de branding)
+            nomes = []
+            if any(x.startswith('ai_') for x in restauradas): nomes.append("IA")
+            if any(x.startswith('veeam') for x in restauradas): nomes.append("Veeam")
+            if any(x.startswith('branding/') for x in restauradas): nomes.append("Branding/logo")
+            extra = " Configurações restauradas: " + (", ".join(nomes) or "nenhuma") + "."
+        return {"status": "ok", "message": res.get("message", "Banco restaurado.") + extra}
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
