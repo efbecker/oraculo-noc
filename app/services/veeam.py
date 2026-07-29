@@ -166,6 +166,16 @@ def _load_map():
 _MAP = _load_map()
 
 
+def reload_from_disk():
+    """Recarrega config e mapeamento do Veeam a partir do disco, sem reiniciar
+    o processo. Usado após restaurar um backup (instance/veeam_config.json e
+    instance/veeam_map.json acabaram de ser sobrescritos)."""
+    global _STATE, _MAP
+    with _state_lock:
+        _STATE = _load_state()
+        _MAP = _load_map()
+
+
 def _save_map(snapshot):
     os.makedirs(INSTANCE_DIR, exist_ok=True)
     with open(VEEAM_MAP_FILE, 'w', encoding='utf-8') as f:
