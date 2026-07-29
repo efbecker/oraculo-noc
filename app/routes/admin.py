@@ -448,9 +448,9 @@ HTML_TEMPLATE = r"""
             <div id="bk-status-msg" class="status-msg"></div>
 
             <h3 class="card-title" style="margin-top:30px; font-size:16px;">Restaurar de um Arquivo Enviado</h3>
-            <p class="field-hint" style="margin-top:0;">Útil para repovoar uma instalação nova a partir de um backup baixado (arquivo .db do SQLite ou .sql/.sql.gz do PostgreSQL). <strong style="color:#ff6b6b;">Isso substitui TODOS os dados atuais.</strong></p>
+            <p class="field-hint" style="margin-top:0;">Útil para repovoar uma instalação nova a partir de um backup baixado. Aceita o <strong>pacote .tar.gz</strong> (banco + configurações de IA, Veeam e logo) e também backups antigos (.db do SQLite ou .sql/.sql.gz do PostgreSQL, que restauram só o banco). <strong style="color:#ff6b6b;">Isso substitui TODOS os dados atuais.</strong></p>
             <div class="row-inline">
-                <input type="file" id="bk-upload-file" accept=".db,.sql,.gz" style="max-width:320px;">
+                <input type="file" id="bk-upload-file" accept=".tar.gz,.tgz,.db,.sql,.gz" style="max-width:320px;">
                 <button type="button" class="btn-danger" onclick="restaurarUpload()">♻️ Restaurar Backup Enviado</button>
             </div>
             <div id="bk-upload-status-msg" class="status-msg"></div>
