@@ -36,6 +36,7 @@ HTML_TEMPLATE = r"""
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Painel Admin - Oráculo</title>
+    <link rel="icon" href="/favicon.ico">
     <style>
         body { background-color: #121212; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, sans-serif; padding: 15px; margin: 0; }
         .container { max-width: 1200px; margin: auto; background: #1e1e1e; padding: 25px; border-radius: 8px; border: 1px solid #333; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
@@ -400,6 +401,30 @@ HTML_TEMPLATE = r"""
                 <button type="button" class="btn-submit" onclick="enviarLogo()">📤 Enviar Logo</button>
             </div>
             <div id="logo-status-msg" class="status-msg"></div>
+
+            <hr style="border:none; border-top:1px solid #2d3748; margin:28px 0;">
+
+            <h3 style="margin:0 0 6px; font-size:16px; color:#e6edf3;">🌐 Favicon</h3>
+            <p style="font-size:13px; color:#aaa; margin-top:0;">
+                Ícone que aparece na aba do navegador. ICO, PNG ou SVG — até 512 KB.
+                (Dica: um PNG quadrado de 32×32 ou 64×64 funciona bem.)
+            </p>
+            {% if favicon.existe %}
+            <div class="row-inline" style="align-items:flex-start; margin-top:14px;">
+                <img src="{{ favicon.data_uri }}" alt="Favicon atual" style="width:48px; height:48px; object-fit:contain; background:#0b1117; border:1px solid #2d3748; border-radius:6px; padding:6px;">
+                <div>
+                    <p style="margin:0; font-size:13px; color:#00e676;">✅ Favicon ativo — {{ favicon.nome }} ({{ favicon.tamanho_kb }} KB)</p>
+                    <button type="button" class="btn-danger" style="margin-top:8px;" onclick="removerFavicon()">🗑️ Remover Favicon</button>
+                </div>
+            </div>
+            {% else %}
+            <p style="font-size:13px; color:#666; margin-top:14px;">Nenhum favicon configurado — o navegador usa o ícone padrão.</p>
+            {% endif %}
+            <div class="row-inline" style="margin-top:16px;">
+                <input type="file" id="favicon-upload-file" accept=".ico,.png,.svg">
+                <button type="button" class="btn-submit" onclick="enviarFavicon()">📤 Enviar Favicon</button>
+            </div>
+            <div id="favicon-status-msg" class="status-msg"></div>
         </div>
         </section>
 
@@ -1097,6 +1122,29 @@ HTML_TEMPLATE = r"""
                 if (data.ok) setTimeout(() => window.location.reload(), 800);
             } catch (e) { mostrarStatus('logo-status-msg', false, 'Erro de comunicação: ' + e); }
         }
+        async function enviarFavicon() {
+            const fileInput = document.getElementById('favicon-upload-file');
+            const file = fileInput.files[0];
+            if (!file) { mostrarStatus('favicon-status-msg', false, 'Selecione um arquivo primeiro.'); return; }
+            mostrarStatus('favicon-status-msg', true, '🔄 Enviando favicon...');
+            const formData = new FormData();
+            formData.append('favicon_file', file);
+            try {
+                const r = await fetch('/admin/branding/favicon/upload', { method: 'POST', body: formData });
+                const data = await r.json();
+                mostrarStatus('favicon-status-msg', data.ok, data.message);
+                if (data.ok) setTimeout(() => window.location.reload(), 1200);
+            } catch (e) { mostrarStatus('favicon-status-msg', false, 'Erro de comunicação: ' + e); }
+        }
+        async function removerFavicon() {
+            if (!confirm('Remover o favicon atual? O navegador volta ao ícone padrão.')) return;
+            try {
+                const r = await fetch('/admin/branding/favicon/remove', { method: 'POST' });
+                const data = await r.json();
+                mostrarStatus('favicon-status-msg', data.ok, data.message);
+                if (data.ok) setTimeout(() => window.location.reload(), 800);
+            } catch (e) { mostrarStatus('favicon-status-msg', false, 'Erro de comunicação: ' + e); }
+        }
 
         // ================== Logs (aba) ==================
         let logsArquivosCarregados = false;
@@ -1201,6 +1249,7 @@ def index():
         backup_cfg=backup_manager.load_config(),
         backups=backup_manager.historico(),
         logo=branding.logo_info(),
+        favicon=branding.favicon_info(),
         veeam_cfg=veeam.current_config(),       # senha já vem MASCARADA
         veeam_map=veeam.list_client_maps(),
     )
@@ -1591,3 +1640,20 @@ def branding_remove():
     if guard: return guard
     branding.remover_logo()
     return jsonify({"ok": True, "message": "Logo removido."})
+
+
+@bp.route('/admin/branding/favicon/upload', methods=['POST'])
+def branding_favicon_upload():
+    guard = _admin_only_json()
+    if guard: return guard
+    f = request.files.get('favicon_file')
+    ok, msg = branding.salvar_favicon(f)
+    return jsonify({"ok": ok, "message": msg})
+
+
+@bp.route('/admin/branding/favicon/remove', methods=['POST'])
+def branding_favicon_remove():
+    guard = _admin_only_json()
+    if guard: return guard
+    branding.remover_favicon()
+    return jsonify({"ok": True, "message": "Favicon removido."})
