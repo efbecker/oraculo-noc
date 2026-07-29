@@ -176,6 +176,18 @@ def _load_profiles():
 _PROFILES = _load_profiles()
 
 
+def reload_from_disk():
+    """Recarrega a config global e os perfis de IA a partir do disco, sem
+    reiniciar o processo. Usado após restaurar um backup: os arquivos
+    instance/ai_config.json e instance/ai_profiles.json acabaram de ser
+    sobrescritos e precisam valer imediatamente."""
+    global _STATE, _PROFILES
+    with _state_lock:
+        _STATE = _load_state()
+    with _profiles_lock:
+        _PROFILES = _load_profiles()
+
+
 def _save_profiles(snapshot):
     os.makedirs(INSTANCE_DIR, exist_ok=True)
     with open(PROFILES_FILE, 'w', encoding='utf-8') as f:
