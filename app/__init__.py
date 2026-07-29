@@ -40,6 +40,23 @@ def create_app():
     app.register_blueprint(logs_admin.bp)
     app.register_blueprint(veeam_admin.bp)
 
+    # ---- Favicon (branding) -------------------------------------------------
+    # Rota PÚBLICA (sem login): o navegador pede /favicon.ico em qualquer página,
+    # inclusive na de login. Serve o favicon enviado no painel de Branding; se
+    # não houver nenhum configurado, devolve 404 e o navegador usa o padrão.
+    @app.route('/favicon.ico')
+    def favicon():
+        from flask import send_file, abort
+        from app.services import branding
+        caminho, mime = branding.get_favicon_arquivo()
+        if not caminho:
+            abort(404)
+        resp = send_file(caminho, mimetype=mime)
+        # Favicon muda raramente, mas queremos que uma troca no painel apareça
+        # sem o usuário ter de limpar o cache.
+        resp.headers['Cache-Control'] = 'no-cache'
+        return resp
+
     # ---- Páginas de erro ----------------------------------------------------
     # URL inexistente (ex.: /adm, /painel, um link velho): se a pessoa NÃO está
     # logada, não faz sentido mostrar um 404 seco — o mais provável é que ela
