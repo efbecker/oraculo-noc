@@ -57,7 +57,7 @@ def get_user_zabbix_url(username):
         return str(row['zabbix_url']).strip() if (row and row['zabbix_url']) else None
     except: return None
 
-def obter_contexto_zabbix_real_time(token, grupo, url=None):
+def obter_contexto_zabbix_real_time(token, grupo, url=None, clock_vcpu=None):
     if not token or token.strip() == "":
         return "ERRO_ZABBIX: Token da API não configurado."
     try:
@@ -77,7 +77,7 @@ def obter_contexto_zabbix_real_time(token, grupo, url=None):
         # consumindo mais CPU?" e "tem gargalo no ambiente?". Silencioso e
         # tolerante a falha: se não vier, o chat segue com o contexto básico.
         try:
-            inventario = montar_inventario_para_ia(token, grupo, url)
+            inventario = montar_inventario_para_ia(token, grupo, url, clock_vcpu=clock_vcpu)
             if inventario:
                 contexto += inventario
         except Exception:
@@ -317,15 +317,24 @@ def process_oraculo_message(message, username, token_zabbix, grupo_cliente, hist
 
         # Fecha as credenciais numa função geradora; o relatório em si (formato
         # HTML) permanece EXATAMENTE o mesmo, apenas passa a rodar em background.
+        # Clock (GHz) por vCPU do cliente (cadastro em Admin > Usuários). Vira a
+        # base da capacidade em GHz no relatório. Ausente/erro → None (o gerador
+        # cai no padrão do sistema).
+        try:
+            _urow = db.query_one("SELECT clock_vcpu FROM users WHERE username=?", (username,))
+            clock_vcpu = _urow.get('clock_vcpu') if _urow else None
+        except Exception:
+            clock_vcpu = None
+
         dias_txt = int(dias) if float(dias).is_integer() else dias
         if target == "TODOS":
             label = f"Relatório FinOps ({dias_txt} dia(s))"
             def _gerar():
-                return gerar_relatorio_consumo_todos(dias, token_zabbix, grupo_cliente, zabbix_url, criado_por=username)
+                return gerar_relatorio_consumo_todos(dias, token_zabbix, grupo_cliente, zabbix_url, criado_por=username, clock_vcpu=clock_vcpu)
         else:
             label = f"Relatório {target} ({dias_txt} dia(s))"
             def _gerar():
-                return gerar_grafico_zabbix(target, metrica, dias, token_zabbix, grupo_cliente, zabbix_url, criado_por=username)
+                return gerar_grafico_zabbix(target, metrica, dias, token_zabbix, grupo_cliente, zabbix_url, criado_por=username, clock_vcpu=clock_vcpu)
 
         job_id = start_report_job(username, label, _gerar, session_id=session_id)
         if not job_id:
@@ -362,7 +371,14 @@ def process_oraculo_message(message, username, token_zabbix, grupo_cliente, hist
         return {"reply": msg_reply, "action": "scan", "target": target, "scan_id": scan_id, "is_html": 0}
 
     # IA Oracle
-    context = obter_contexto_zabbix_real_time(token_zabbix, grupo_cliente, zabbix_url)
+    # Clock por vCPU do cliente (Admin > Usuários) — usado no fallback de cálculo
+    # de CPU do inventário quando a VM não expõe capacity.ghz.
+    try:
+        _urow = db.query_one("SELECT clock_vcpu FROM users WHERE username=?", (username,))
+        _clock_vcpu = _urow.get('clock_vcpu') if _urow else None
+    except Exception:
+        _clock_vcpu = None
+    context = obter_contexto_zabbix_real_time(token_zabbix, grupo_cliente, zabbix_url, clock_vcpu=_clock_vcpu)
     if "ERRO_ZABBIX" in context:
         logger.error(f"[Zabbix] Falha de comunicação para o usuário '{username}': {context}")
         return {
