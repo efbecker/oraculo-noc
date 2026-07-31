@@ -87,6 +87,22 @@ SO_KEY_REGEX = re.compile(
     re.IGNORECASE
 )
 
+# Hosts "agregadores/virtuais" que o cliente usa só no MAPA da infraestrutura
+# (ex.: *_ALERTAS, *_SOMA_TRAFEGO_INTERFACES). Não são VMs reais — não têm SO,
+# vCPU nem consumo próprio — então são EXCLUÍDOS do relatório e do inventário
+# do chat, onde só poluiriam com "Não Monitorado / N/A".
+HOSTS_AGREGADORES_REGEX = re.compile(
+    r'(?:(?:^|[_\-\s])ALERTAS(?:[_\-\s]|$)|SOMA[_\-\s]?(?:DE[_\-\s]?)?TRAFEGO|'
+    r'TRAFEGO[_\-\s]?INTERFACES|SOMA[_\-\s]?(?:DAS?[_\-\s]?)?INTERFACES)',
+    re.IGNORECASE
+)
+
+
+def _eh_host_agregador(nome):
+    """True se o host for um agregador de mapa (Alertas / Soma de tráfego), que
+    não deve entrar no relatório nem no inventário da IA."""
+    return bool(nome and HOSTS_AGREGADORES_REGEX.search(nome))
+
 # Normalizador de ponto de montagem em nível de módulo (mesma regra da função
 # do relatório): aceita disco Linux ('/...') ou drive Windows (uma letra).
 # Fica aqui fora para o INVENTÁRIO da IA reaproveitar sem depender do closure
@@ -692,6 +708,11 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
         hosts = zabbix_api("host.get", {"output": ["hostid", "name"], **filtro}, token, url)
         if not hosts: return "Nenhum servidor encontrado no grupo."
 
+        # Remove hosts agregadores de mapa (Alertas / Soma de tráfego): não são
+        # VMs reais e só apareceriam no relatório como "Não Monitorado".
+        hosts = [h for h in hosts if not _eh_host_agregador(h.get('name', ''))]
+        if not hosts: return "Nenhum servidor encontrado no grupo."
+
         if host_filter:
             # IMPORTANTE: o filtro por nome atua SEMPRE sobre a lista já restrita
             # ao grupo do usuário (filtro acima) — nunca busca fora do escopo do
@@ -1148,7 +1169,8 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
                 resumo_card_html = f"""
                     <div style='flex: 1; min-width: 250px; background:#121212; padding:15px; border-radius:6px; font-size:14px; border: 1px solid #2a2a2a;'>
                         <strong style='color:#888;'>CAPACITY ALOCADO:</strong><br><br>
-                        vCPUs: <strong style='color:#ffffff'>{cpu_tot_val}</strong>{f" <span style='color:#00e5ff'>({capacidade_ghz:.1f} GHz)</span>" if capacidade_ghz else ""}<br>
+                        vCPUs: <strong style='color:#ffffff'>{cpu_tot_val}</strong><br>
+                        {f"Capacidade Computacional: <strong style='color:#00e5ff'>{n_vcpu} vCPUs × {clock_ghz:g} = {capacidade_ghz:.1f} GHz</strong><br>" if capacidade_ghz else ""}
                         Memória: <strong style='color:#ffffff'>{mem_tot_val}</strong>
                     </div>
                     <div style='flex: 1.5; min-width: 300px; font-family:monospace; background:#121212; padding:15px; border-radius:6px; font-size:14px; border: 1px solid #2a2a2a;'>
@@ -1372,6 +1394,11 @@ def montar_inventario_para_ia(token, grupo, url=None, clock_vcpu=None):
                 filtro["groupids"] = g_res[0].get('groupid')
 
         hosts = zabbix_api("host.get", {"output": ["hostid", "name"], **filtro}, token, url)
+        if not hosts:
+            return ""
+        # Ignora hosts agregadores de mapa (Alertas / Soma de tráfego) — não são
+        # VMs reais e só confundiriam a contagem/análise da IA.
+        hosts = [h for h in hosts if not _eh_host_agregador(h.get('name', ''))]
         if not hosts:
             return ""
 
