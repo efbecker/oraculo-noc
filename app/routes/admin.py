@@ -186,6 +186,11 @@ HTML_TEMPLATE = r"""
                             {% endfor %}
                         </select>
                     </div>
+                    <div class="form-group">
+                        <label>Clock por vCPU (GHz)</label>
+                        <input type="number" step="0.1" min="0.1" name="clock_vcpu" id="form-clock" placeholder="2.0" value="2.0">
+                        <span class="field-hint" style="display:block; margin-top:4px;">GHz de cada vCPU no cluster do cliente. Capacidade da VM = nº vCPUs × este valor. Ex.: 2.8 ou 3.0.</span>
+                    </div>
                 </div>
                 <button type="submit" class="btn-submit" id="form-submit-btn">Salvar Configuração</button>
             </form>
@@ -772,7 +777,7 @@ HTML_TEMPLATE = r"""
                             <td><span style="color:#ff9e00; font-family: monospace;">${escapeHtml(u.grupo_cliente)}</span></td>
                             <td><span style="color:#00e676; font-size: 12px;">${u.zabbix_url ? escapeHtml(u.zabbix_url) : '🌍 Padrão Global'}</span></td>
                             <td class="actions-cell">
-                                <button type="button" class="btn-edit" onclick='editarUsuario(${JSON.stringify(u.username)}, ${JSON.stringify(u.profile)}, ${JSON.stringify(u.grupo_cliente)}, ${JSON.stringify(u.zabbix_url || "")}, ${JSON.stringify(u.ai_profile || "")})'>Editar</button>
+                                <button type="button" class="btn-edit" onclick='editarUsuario(${JSON.stringify(u.username)}, ${JSON.stringify(u.profile)}, ${JSON.stringify(u.grupo_cliente)}, ${JSON.stringify(u.zabbix_url || "")}, ${JSON.stringify(u.ai_profile || "")}, ${JSON.stringify(u.clock_vcpu != null ? u.clock_vcpu : 2.0)})'>Editar</button>
                                 <form method="POST" action="/admin/delete" style="margin: 0;" onsubmit="return confirm('Deseja excluir este usuário?');">
                                     <input type="hidden" name="id" value="${u.id}">
                                     <button type="submit" class="btn-danger">Excluir</button>
@@ -799,13 +804,14 @@ HTML_TEMPLATE = r"""
             usersBuscaTimer = setTimeout(() => carregarUsuarios(1), 350);  // debounce
         });
 
-        function editarUsuario(username, profile, grupo, url, aiProfile) {
+        function editarUsuario(username, profile, grupo, url, aiProfile, clockVcpu) {
             document.getElementById('form-title').innerHTML = "📝 Editando Conta: <strong style='color:#00e5ff;'>" + username + "</strong>";
             document.getElementById('form-username').value = username;
             document.getElementById('form-username').readOnly = true;
             document.getElementById('form-profile').value = profile;
             document.getElementById('form-grupo').value = grupo;
             document.getElementById('form-url').value = url;
+            document.getElementById('form-clock').value = (clockVcpu != null && clockVcpu !== '') ? clockVcpu : '2.0';
             // Perfil de IA do usuário: sem esta linha, o select voltava sempre para
             // "IA padrão do sistema" ao editar — e um Salvar descuidado APAGAVA o
             // vínculo do cliente com a IA dele.
@@ -1299,7 +1305,7 @@ def users_list():
     offset = (page - 1) * per_page
 
     rows = db.query_all(
-        f"SELECT id, username, profile, grupo_cliente, zabbix_url, ai_profile "
+        f"SELECT id, username, profile, grupo_cliente, zabbix_url, ai_profile, clock_vcpu "
         f"FROM users {where} ORDER BY username ASC LIMIT ? OFFSET ?",
         tuple(params) + (per_page, offset)
     )
@@ -1320,14 +1326,23 @@ def save_user():
     token_zabbix = request.form.get('token_zabbix').strip()
     ai_profile = (request.form.get('ai_profile') or '').strip()
     zabbix_url = request.form.get('zabbix_url').strip()
-    
+
+    # Clock por vCPU (GHz). Aceita vírgula ou ponto; fora de faixa cai no padrão 2.0.
+    clock_raw = (request.form.get('clock_vcpu') or '').strip().replace(',', '.')
+    try:
+        clock_vcpu = float(clock_raw)
+        if not (0.1 <= clock_vcpu <= 10):
+            clock_vcpu = 2.0
+    except (TypeError, ValueError):
+        clock_vcpu = 2.0
+
     user = db.query_one("SELECT id FROM users WHERE username=?", (username,))
     
     if user:
         # O modelo de IA não é mais por usuário: cada conta usa um PERFIL de IA
         # (Admin > Inteligência Artificial) vinculado no campo ai_profile.
-        query = "UPDATE users SET profile=?, grupo_cliente=?, zabbix_url=?, ai_profile=?"
-        params = [profile, grupo_cliente, zabbix_url, ai_profile]
+        query = "UPDATE users SET profile=?, grupo_cliente=?, zabbix_url=?, ai_profile=?, clock_vcpu=?"
+        params = [profile, grupo_cliente, zabbix_url, ai_profile, clock_vcpu]
         if password and password.strip() != "":
             query += ", password=?"
             params.append(generate_password_hash(password))  # nunca grava texto puro
@@ -1345,8 +1360,8 @@ def save_user():
         else:
             senha_hash = generate_password_hash(secrets.token_urlsafe(24))
         db.execute(
-            "INSERT INTO users (username, password, profile, grupo_cliente, token_zabbix, zabbix_url, ai_profile) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (username, senha_hash, profile, grupo_cliente, token_zabbix, zabbix_url, ai_profile)
+            "INSERT INTO users (username, password, profile, grupo_cliente, token_zabbix, zabbix_url, ai_profile, clock_vcpu) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (username, senha_hash, profile, grupo_cliente, token_zabbix, zabbix_url, ai_profile, clock_vcpu)
         )
     # Redireciona SEMPRE para o painel de usuários, sem depender de request.referrer.
     # Atrás de um proxy (Cloudflare/nginx), o referrer pode vir vazio ou apontando
