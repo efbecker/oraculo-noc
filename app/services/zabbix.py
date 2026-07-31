@@ -188,6 +188,112 @@ def _titulo_disco_curto(mount, limite=22):
         cauda = cauda[corte:]
     return '…' + cauda
 
+
+def _parse_gb(texto):
+    """Extrai o valor em GB de uma string tipo '8.0 GB' / '512.0 MB' / '1.5 TB'.
+    Devolve float (em GB) ou None."""
+    if not texto:
+        return None
+    m = re.search(r'([\d.]+)\s*(TB|GB|MB)', str(texto), re.IGNORECASE)
+    if not m:
+        return None
+    val = float(m.group(1))
+    unit = m.group(2).upper()
+    if unit == 'TB':
+        return val * 1024
+    if unit == 'MB':
+        return val / 1024
+    return val
+
+
+def _finops_capacity_insights(n_vcpu, capacidade_ghz, clock_ghz,
+                              cpu_avg, cpu_peak, cpu_unit,
+                              mem_avg, mem_peak, mem_unit, mem_total_gb):
+    """Gera recomendações FinOps AGRESSIVAS de right-sizing por VM, cruzando o
+    consumo médio/pico com a CAPACIDADE (nº_vCPUs × clock do cluster do cliente).
+
+    Funciona tanto quando o consumo vem em GHz (VMware) quanto em % (agente):
+    normaliza para % de utilização + GHz consumidos e recomenda quantas vCPUs /
+    quanto de RAM manter, cobrindo o pico com ~30% de folga. Devolve lista de
+    bullets HTML (mesmo formato/estilo dos insights atuais — não muda o layout)."""
+    ins = []
+
+    # ---------------- CPU ----------------
+    cpu_u = (cpu_unit or '').lower()
+    util_avg = util_peak = None
+    cons_avg_ghz = cons_peak_ghz = None
+    if cpu_avg is not None:
+        if cpu_u == '%':
+            util_avg, util_peak = cpu_avg, cpu_peak
+            if capacidade_ghz:
+                cons_avg_ghz = util_avg / 100 * capacidade_ghz
+                cons_peak_ghz = (util_peak if util_peak is not None else util_avg) / 100 * capacidade_ghz
+        elif 'hz' in cpu_u:  # consumo em GHz (VMware)
+            cons_avg_ghz, cons_peak_ghz = cpu_avg, cpu_peak
+            if capacidade_ghz:
+                util_avg = cons_avg_ghz / capacidade_ghz * 100
+                util_peak = (cons_peak_ghz if cons_peak_ghz is not None else cons_avg_ghz) / capacidade_ghz * 100
+
+    if util_avg is not None and n_vcpu and capacidade_ghz:
+        base_peak = cons_peak_ghz if cons_peak_ghz is not None else cons_avg_ghz
+        rec = max(1, math.ceil((base_peak or 0) * 1.3 / clock_ghz)) if base_peak else n_vcpu
+        rec = min(rec, n_vcpu)
+        cons_txt = f"{cons_avg_ghz:.1f} de {capacidade_ghz:.0f} GHz" if cons_avg_ghz is not None else f"{util_avg:.0f}%"
+        pico_txt = f"{util_peak:.0f}%" if util_peak is not None else "n/d"
+        if util_avg < 15 and (util_peak is None or util_peak < 60) and rec < n_vcpu:
+            ins.append(
+                f"🔻 <b>Right-Sizing agressivo (CPU ociosa):</b> média de apenas {util_avg:.0f}% da capacidade "
+                f"({cons_txt}), pico {pico_txt}. Recomenda-se reduzir de <b>{n_vcpu}</b> para <b>{rec}</b> vCPUs "
+                f"(~{rec*clock_ghz:.0f} GHz) — devolve recursos ociosos ao cluster.")
+        elif util_avg < 35 and rec < n_vcpu:
+            ins.append(
+                f"🔸 <b>CPU subutilizada:</b> média {util_avg:.0f}% ({cons_txt}), pico {pico_txt}. "
+                f"Há folga para reduzir de {n_vcpu} para {rec} vCPUs.")
+        elif util_peak is not None and util_peak > 90:
+            ins.append(f"🚨 <b>CPU sob pressão:</b> picos de {util_peak:.0f}% da capacidade. Avalie AUMENTAR vCPUs.")
+    elif cpu_avg is not None and cpu_u == '%':
+        # Sem capacidade em GHz (sem contagem de vCPU): regras clássicas por %.
+        if cpu_avg < 20:
+            ins.append("📉 <b>CPU (FinOps):</b> Ociosidade (média < 20%). Avalie downsize.")
+        elif cpu_peak and cpu_peak > 90:
+            ins.append("🚨 <b>CPU (Capacity):</b> Gargalo (picos > 90%). Upgrade recomendado.")
+
+    # ---------------- Memória ----------------
+    mem_u = (mem_unit or '').lower()
+    m_util_avg = m_util_peak = None
+    m_avg_gb = m_peak_gb = None
+    if mem_avg is not None:
+        if mem_u == '%':
+            m_util_avg, m_util_peak = mem_avg, mem_peak
+            if mem_total_gb:
+                m_avg_gb = m_util_avg / 100 * mem_total_gb
+                m_peak_gb = (m_util_peak if m_util_peak is not None else m_util_avg) / 100 * mem_total_gb
+        elif 'gb' in mem_u or 'mb' in mem_u or mem_u == 'b':  # consumo em GB (VMware)
+            m_avg_gb, m_peak_gb = mem_avg, mem_peak
+            if mem_total_gb:
+                m_util_avg = m_avg_gb / mem_total_gb * 100
+                m_util_peak = (m_peak_gb if m_peak_gb is not None else m_avg_gb) / mem_total_gb * 100
+
+    if m_util_avg is not None and mem_total_gb:
+        base_gb = m_peak_gb if m_peak_gb is not None else m_avg_gb
+        rec_gb = max(1, math.ceil((base_gb or 0) * 1.3))
+        rec_gb = min(rec_gb, int(round(mem_total_gb)))
+        gb_txt = f"{m_avg_gb:.1f} de {mem_total_gb:.0f} GB" if m_avg_gb is not None else f"{m_util_avg:.0f}%"
+        pico_txt = f"{m_util_peak:.0f}%" if m_util_peak is not None else "n/d"
+        if m_util_avg < 35 and rec_gb < mem_total_gb * 0.9:
+            ins.append(
+                f"🔻 <b>Right-Sizing (RAM ociosa):</b> uso médio de {gb_txt} ({m_util_avg:.0f}%), pico {pico_txt}. "
+                f"Avalie reduzir a RAM para ~{rec_gb} GB.")
+        elif m_util_peak is not None and m_util_peak > 90:
+            ins.append("🚨 <b>Memória saturada (> 90%):</b> risco de swap — avalie AUMENTAR a RAM.")
+    elif mem_avg is not None and mem_u == '%':
+        if mem_avg < 30:
+            ins.append("📉 <b>Memória (FinOps):</b> Ociosidade. Possível downgrade.")
+        elif mem_peak and mem_peak > 90:
+            ins.append("🚨 <b>Memória (Capacity):</b> Saturação > 90%. Risco de swap.")
+
+    return ins
+
 # A MÁGICA COMEÇA AQUI: Recebe a URL do cliente, se não tiver, usa a padrão
 def _chunks(lista, tamanho):
     """Divide uma lista em pedaços menores — usado pra não mandar UMA chamada
@@ -558,7 +664,7 @@ def consultar_incidentes_zabbix(nome_alvo: str, dias_historico: float, token: st
 
     except Exception as e: return f"Erro na coleta de incidentes: {str(e)}"
 
-def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str, url: str = None, host_filter: str = None, criado_por: str = None) -> str:
+def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str, url: str = None, host_filter: str = None, criado_por: str = None, clock_vcpu: float = None) -> str:
     """Gera o relatório completo (CPU/memória/rede/discos) para os hosts do
     grupo do usuário. Se host_filter for informado, restringe aos hosts cujo
     nome bate com esse filtro (usado pelo pedido de relatório de UMA VM
@@ -568,6 +674,14 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
     hora_atual = int(time.time())
     hora_passada = int(hora_atual - (dias * 24 * 3600))
     metodo_hist = "trend.get" if dias > 1 else "history.get"
+
+    # Clock (GHz) de cada vCPU no cluster deste cliente. Vem do cadastro do
+    # usuário (Admin > Usuários); se não informado, usa o padrão do sistema.
+    # Base da capacidade: capacidade_GHz = nº_vCPUs × clock_ghz.
+    try:
+        clock_ghz = float(clock_vcpu) if clock_vcpu and float(clock_vcpu) > 0 else GHZ_POR_VCPU
+    except (TypeError, ValueError):
+        clock_ghz = GHZ_POR_VCPU
     
     try:
         filtro = {}
@@ -763,11 +877,16 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
             hist_by_item = fetch_historical_data(host_items_to_fetch, hora_passada, hora_atual, dias, token, url)
             
             cpu_tot_val, mem_tot_val = "-", "-"
+            n_vcpu = None            # nº de vCPUs (numérico) para o cálculo de capacidade
+            capacidade_ghz = None    # nº_vCPUs × clock_ghz
             if not is_fgt:
                 cpu_tot_val, mem_tot_val = "Não Monitorado", "Não Monitorado"
                 if h_it['cpu_total'] and h_it['cpu_total']['itemid'] in hist_by_item:
                     v = [float(x.get('value_avg', x.get('value', 0))) for x in hist_by_item[h_it['cpu_total']['itemid']]]
-                    if v: cpu_tot_val = f"{int(max(v))} vCPUs"
+                    if v:
+                        n_vcpu = int(max(v))
+                        capacidade_ghz = n_vcpu * clock_ghz
+                        cpu_tot_val = f"{n_vcpu} vCPUs"
                 
                 if h_it['mem_total'] and h_it['mem_total']['itemid'] in hist_by_item:
                     v = [float(x.get('value_avg', x.get('value', 0))) for x in hist_by_item[h_it['mem_total']['itemid']]]
@@ -839,6 +958,10 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
                 gs = gridspec.GridSpec(total_rows, 1, figure=fig, hspace=0.5)
 
             c_str, m_str, ni_str, no_str, vpn_str, d_str_resumo, u_str = "N/A", "N/A", "N/A", "N/A", "N/A", "N/A", "N/A"
+            # Capturados no laço de gráficos para a análise FinOps de capacidade
+            # (feita após o laço, quando já temos a capacidade em GHz).
+            cpu_avg_val = cpu_peak_val = None; cpu_unit = ""
+            mem_avg_val = mem_peak_val = None; mem_unit = ""
             insights_finops = []
 
             # Uptime: usa o valor MAIS RECENTE (lastvalue), não uma média sobre o
@@ -883,18 +1006,16 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
                             u = '%' if not u and avg <= 100.5 else u
                             set_y_formatter(ax, u)
                             c_str = f"{avg:.1f}{u}" if u == '%' else f"{avg:.1f} {u}".strip()
+                            cpu_avg_val, cpu_peak_val, cpu_unit = avg, mx, u
                             if u == '%':
                                 if mx > max_cpu_global: max_cpu_global = mx; vm_max_cpu = name
-                                if not is_fgt and avg < 20: insights_finops.append("📉 <b>CPU (FinOps):</b> Ociosidade (Média < 20%). Avalie downsize.")
-                                elif mx > 90: insights_finops.append("🚨 <b>CPU (Capacity):</b> Gargalo detectado (Picos > 90%). Upgrade recomendado.")
                         elif lp['type'] == 'mem':
                             u = '%' if not u and avg <= 100.5 else u
                             set_y_formatter(ax, u)
                             m_str = f"{avg:.1f}{u}" if u == '%' else f"{avg:.1f} {u}".strip()
+                            mem_avg_val, mem_peak_val, mem_unit = avg, mx, u
                             if u == '%':
                                 if mx > max_mem_global: max_mem_global = mx; vm_max_mem = name
-                                if not is_fgt and avg < 30: insights_finops.append("📉 <b>Memória (FinOps):</b> Ociosidade. Possível downgrade.")
-                                elif mx > 90: insights_finops.append("🚨 <b>Memória (Capacity):</b> Saturação > 90%. Risco de Swap.")
                         elif lp['type'] == 'vpn':
                             vpn_str = f"{avg:.0f} Usr (Pico: {mx:.0f})"
                             insights_finops.append(f"🌐 <b>VPN SSL:</b> Registrado pico de {mx:.0f} conexões simultâneas.")
@@ -922,6 +1043,14 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
                             if avg_out >= 1000: no_str = f"{avg_out/1000:.2f} Gbps"
                             elif avg_out > 0 and avg_out < 1: no_str = f"{avg_out*1000:.0f} Kbps"
                             else: no_str = f"{avg_out:.2f} Mbps"
+
+            # Análise FinOps de capacidade (right-sizing agressivo), agora que já
+            # temos consumo médio/pico + a capacidade em GHz da VM.
+            if not is_fgt:
+                insights_finops.extend(_finops_capacity_insights(
+                    n_vcpu, capacidade_ghz, clock_ghz,
+                    cpu_avg_val, cpu_peak_val, cpu_unit,
+                    mem_avg_val, mem_peak_val, mem_unit, _parse_gb(mem_tot_val)))
 
             def _calcular_uso_disco(items_por_tipo):
                 """Calcula o % de USO de um disco a partir dos itens disponíveis
@@ -1019,7 +1148,7 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
                 resumo_card_html = f"""
                     <div style='flex: 1; min-width: 250px; background:#121212; padding:15px; border-radius:6px; font-size:14px; border: 1px solid #2a2a2a;'>
                         <strong style='color:#888;'>CAPACITY ALOCADO:</strong><br><br>
-                        vCPUs: <strong style='color:#ffffff'>{cpu_tot_val}</strong><br>
+                        vCPUs: <strong style='color:#ffffff'>{cpu_tot_val}</strong>{f" <span style='color:#00e5ff'>({capacidade_ghz:.1f} GHz)</span>" if capacidade_ghz else ""}<br>
                         Memória: <strong style='color:#ffffff'>{mem_tot_val}</strong>
                     </div>
                     <div style='flex: 1.5; min-width: 300px; font-family:monospace; background:#121212; padding:15px; border-radius:6px; font-size:14px; border: 1px solid #2a2a2a;'>
@@ -1049,10 +1178,20 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
                 f"font-family:sans-serif;'>{_ic} {_so_label}</span>"
             )
 
+            # Selo de CAPACIDADE em GHz no cabeçalho (nº_vCPUs × clock do cliente).
+            cap_badge_html = ""
+            if capacidade_ghz:
+                cap_badge_html = (
+                    f"<span style='display:inline-block; margin-left:10px; padding:3px 12px; "
+                    f"background:#121212; border:1px solid #00e5ff; border-radius:14px; "
+                    f"font-size:13px; font-weight:600; color:#00e5ff; vertical-align:middle; "
+                    f"font-family:sans-serif;'>⚡ {capacidade_ghz:.1f} GHz</span>"
+                )
+
             secoes_html_vms.append(f"""
             <div id='vm_{hid}' style='background:#1e1e1e; padding:25px; border-radius:8px; margin-bottom:40px; border:1px solid #333; box-shadow: 0 4px 15px rgba(0,0,0,0.5);'>
                 <h2 style='color:#ffffff; margin-top:0; border-bottom:1px solid #333; padding-bottom:10px;'>
-                    <span class='status-dot green'></span> {name}{so_badge_html}
+                    <span class='status-dot green'></span> {name}{so_badge_html}{cap_badge_html}
                 </h2>
                 <div style='display: flex; flex-wrap: wrap; gap: 20px; margin-bottom: 20px;'>
                     {resumo_card_html}
@@ -1154,7 +1293,7 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
         return html_progress + msg_chat + botao_html
     except Exception as e: return f"Erro ao gerar relatório global: {str(e)}"
 
-def gerar_grafico_zabbix(nome_host: str, metrica: str, quantidade_dias: float, token: str, grupo: str = None, url: str = None, criado_por: str = None) -> str:
+def gerar_grafico_zabbix(nome_host: str, metrica: str, quantidade_dias: float, token: str, grupo: str = None, url: str = None, criado_por: str = None, clock_vcpu: float = None) -> str:
     """Relatório de UMA VM específica, pedida por nome (ex.: "gere relatório
     da VM CLIENTE_ASV_VM_ASV-BD01-IPEL"). Reaproveita o MESMO motor/layout do
     relatório de "TODOS" (gerar_relatorio_consumo_todos), só restringindo a
@@ -1165,7 +1304,7 @@ def gerar_grafico_zabbix(nome_host: str, metrica: str, quantidade_dias: float, t
     do host NUNCA sai do grupo/conta do usuário que pediu o relatório, mesmo
     que exista uma VM com nome parecido em outra conta.
     """
-    return gerar_relatorio_consumo_todos(quantidade_dias, token, grupo, url, host_filter=nome_host, criado_por=criado_por)
+    return gerar_relatorio_consumo_todos(quantidade_dias, token, grupo, url, host_filter=nome_host, criado_por=criado_por, clock_vcpu=clock_vcpu)
 
 
 
@@ -1205,7 +1344,7 @@ def _fmt_ram_bytes(lv):
     return f"{b:.0f} B"
 
 
-def montar_inventario_para_ia(token, grupo, url=None):
+def montar_inventario_para_ia(token, grupo, url=None, clock_vcpu=None):
     """Monta um INVENTÁRIO textual, ao vivo, de todas as VMs/hosts do grupo do
     usuário, para ALIMENTAR A IA DO CHAT. É o que permite o Oráculo responder
     perguntas como:
@@ -1222,6 +1361,10 @@ def montar_inventario_para_ia(token, grupo, url=None):
     Devolve uma string pronta para o contexto da IA, ou '' se não houver hosts.
     Nunca levanta exceção para fora (o chat não pode quebrar por causa disso)."""
     try:
+        try:
+            _clock = float(clock_vcpu) if clock_vcpu and float(clock_vcpu) > 0 else GHZ_POR_VCPU
+        except (TypeError, ValueError):
+            _clock = GHZ_POR_VCPU
         filtro = {}
         if grupo and grupo != "GLOBAL":
             g_res = zabbix_api("hostgroup.get", {"search": {"name": grupo}}, token, url)
@@ -1404,7 +1547,7 @@ def montar_inventario_para_ia(token, grupo, url=None):
             #   1) capacity.ghz (real, calculado pelo Zabbix)
             #   2) vCPUs × 2 GHz (padrão do cluster) — se não houver capacity.ghz
             us_ghz = d['cpu_usage_ghz']
-            cap = d['cpu_capacity_ghz'] or ((d['vcpu'] * GHZ_POR_VCPU) if d['vcpu'] else None)
+            cap = d['cpu_capacity_ghz'] or ((d['vcpu'] * _clock) if d['vcpu'] else None)
             if us_ghz is not None and cap:
                 pct = min(100.0, max(0.0, us_ghz / cap * 100.0))
                 cpu = f"{pct:.0f}% ({us_ghz:.2f} de {cap:.1f} GHz)"
