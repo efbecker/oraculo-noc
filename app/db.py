@@ -355,7 +355,8 @@ def init_schema():
                 grupo_cliente TEXT,
                 token_zabbix TEXT,
                 zabbix_url TEXT,
-                ai_model TEXT
+                ai_model TEXT,
+                clock_vcpu REAL DEFAULT 2.0
             )
         """)
 
@@ -430,6 +431,11 @@ def init_schema():
         # nomeado em instance/ai_profiles.json (ex.: 'Gemini-Pollux'). Vazio/NULL
         # = usa a IA global padrão. Migração automática em bancos existentes.
         _add_column_if_missing(conn, 'users', 'ai_profile', 'TEXT')
+        # Clock (GHz) de cada vCPU no cluster VMware do cliente. Varia por cliente
+        # (2.0, 2.8, 3.0 GHz...). Base do cálculo de capacidade nos relatórios:
+        # capacidade_total_GHz = nº_vCPUs × clock_vcpu. Default 2.0 (o valor que
+        # era fixo para todo mundo antes).
+        _add_column_if_missing(conn, 'users', 'clock_vcpu', 'REAL DEFAULT 2.0')
         # 'reports' ganhou tipo/ref para unificar FinOps e SecOps num só índice
         # (painel Admin > Relatórios). 'tipo' = finops|secops; 'ref' = id de
         # origem quando não há arquivo próprio (ex.: scan_id do SecOps).
