@@ -1,8 +1,10 @@
 import os
+import time
+from datetime import timedelta
 from flask import Flask, render_template_string
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash
-from app.settings import SECRET_KEY
+from app.settings import SECRET_KEY, SESSION_IDLE_MINUTES
 from app import db
 
 def init_db():
@@ -23,7 +25,47 @@ def create_app():
     app = Flask(__name__, static_folder='static', static_url_path='/static')
     CORS(app)
     app.secret_key = SECRET_KEY
-    
+
+    # Logout automático por inatividade. O cookie de sessão passa a ter validade
+    # (antes era "para sempre"), e reforçamos com uma checagem no servidor.
+    app.permanent_session_lifetime = timedelta(minutes=max(1, SESSION_IDLE_MINUTES or 1))
+
+    # Endpoints que o FRONTEND consulta sozinho em background (radar de scans).
+    # Eles NÃO devem renovar a atividade — senão um usuário que saiu da frente
+    # do PC durante/depois de um scan nunca expiraria. A sessão continua exigida
+    # (autenticada), só não "conta como atividade".
+    POLL_PATHS = ('/api/active_scans',)
+
+    @app.before_request
+    def _controle_de_inatividade():
+        from flask import session, request, redirect, url_for, jsonify
+        # Timeout desativado (0) ou usuário não logado: nada a fazer.
+        if not SESSION_IDLE_MINUTES or 'user_id' not in session:
+            return
+        # Não interfere em recursos públicos/estáticos nem no próprio logout.
+        endpoint = request.endpoint or ''
+        if endpoint in ('static', 'favicon', 'auth.login', 'auth.logout'):
+            return
+
+        agora = time.time()
+        limite = SESSION_IDLE_MINUTES * 60
+        ultimo = session.get('last_active')
+
+        if ultimo and (agora - ultimo) > limite:
+            # Sessão expirada por inatividade: encerra e responde conforme o tipo.
+            session.clear()
+            eh_api = request.path.startswith('/api') or request.path.startswith('/admin/')
+            if eh_api:
+                return jsonify({"error": "Sessão expirada por inatividade. Faça login novamente.",
+                                "session_expired": True}), 401
+            return redirect(url_for('auth.login', expirado=1))
+
+        # Requisição de atividade real reinicia o contador; o radar de background
+        # (POLL_PATHS) mantém a sessão viva mas NÃO reinicia o relógio de ociosidade.
+        if request.path not in POLL_PATHS:
+            session.permanent = True
+            session['last_active'] = agora
+
     # Inicializa Banco de Dados e Pastas
     init_db()
     os.makedirs(app.static_folder, exist_ok=True)
