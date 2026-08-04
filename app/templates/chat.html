@@ -68,6 +68,15 @@
         .btn-send { background: #0077ff; color: #fff; border: none; width: 36px; height: 36px; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: 0.3s; flex-shrink: 0; }
         .btn-send:hover { background: #0055ff; transform: translateY(-2px); }
         .loading { color: #00e5ff; font-size: 14px; font-style: italic; margin-left: 20px; display: none; }
+        /* três pontinhos animados ao lado da mensagem de estágio ("pensando") */
+        .loading .dots::after { content: ''; animation: oraculo-dots 1.4s steps(4, end) infinite; }
+        @keyframes oraculo-dots { 0% { content: ''; } 25% { content: '.'; } 50% { content: '..'; } 75% { content: '...'; } 100% { content: ''; } }
+        /* cursor de digitação (efeito "escrevendo") */
+        .type-cursor { display: inline-block; width: 7px; margin-left: 1px; color: #00e5ff; animation: oraculo-blink 1s step-end infinite; font-weight: bold; }
+        @keyframes oraculo-blink { 50% { opacity: 0; } }
+        /* aparição suave das mensagens HTML (relatórios/widgets) que não são digitadas */
+        .msg-fade-in { animation: oraculo-fade 0.35s ease-out; }
+        @keyframes oraculo-fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
         @media (max-width: 768px) {
             body { flex-direction: column; }
@@ -117,7 +126,7 @@
         </div>
         
         <div class="chat-messages" id="chatMessages"></div>
-        <div id="loading" class="loading msg-bot">Oráculo está a pensar...</div>
+        <div id="loading" class="loading msg-bot"><span id="loading-stage">Oráculo está a pensar</span><span class="dots"></span></div>
 
         <div class="input-wrapper">
             <div class="input-box">
@@ -353,6 +362,72 @@
             }
         }
 
+        // ===== Efeito "pensando": mensagens de estágio girando enquanto espera =====
+        const ESTAGIOS = ["Consultando o Zabbix", "Analisando a infraestrutura", "Cruzando as métricas", "Gerando a resposta"];
+        let _estagioTimer = null, _estagioIdx = 0;
+        function iniciarEstagios() {
+            const el = document.getElementById('loading-stage');
+            _estagioIdx = 0;
+            if (el) el.textContent = ESTAGIOS[0];
+            loading.style.display = 'block';
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+            clearInterval(_estagioTimer);
+            _estagioTimer = setInterval(() => {
+                // Avança pelos estágios e SEGURA no último ("Gerando a resposta"),
+                // já que o backend não expõe o progresso real (Opção A: front-only).
+                if (_estagioIdx < ESTAGIOS.length - 1) {
+                    _estagioIdx++;
+                    const e = document.getElementById('loading-stage');
+                    if (e) e.textContent = ESTAGIOS[_estagioIdx];
+                }
+            }, 1600);
+        }
+        function pararEstagios() {
+            clearInterval(_estagioTimer); _estagioTimer = null;
+            loading.style.display = 'none';
+        }
+
+        // Texto "limpo" para a fase de digitação (sem marcações markdown, que
+        // ficariam feias sendo reveladas caractere a caractere).
+        function previewTexto(reply) {
+            return (reply || '')
+                .replace(/```[a-z]*|```/gi, '')
+                .replace(/\*\*(.*?)\*\*/g, '$1')
+                .replace(/^#{1,3}\s*/gm, '')
+                .replace(/^-\s+/gm, '• ')
+                .replace(/\[BOTÃO_DOWNLOAD:.*?\]/g, '')
+                .replace(/\[(.*?)\]\((.*?)\)/g, '$1')
+                .trim();
+        }
+
+        // Revela a resposta de TEXTO "escrevendo"; ao terminar, troca pela versão
+        // formatada (negrito, bullets, links). HTML (relatórios/botões) NÃO passa
+        // por aqui — seria quebrado ao digitar tag por tag.
+        function appendBotDigitando(reply, timestamp) {
+            const msgDiv = document.createElement('div');
+            msgDiv.classList.add('msg-bot');
+            const corpo = document.createElement('span');
+            const cursor = document.createElement('span');
+            cursor.className = 'type-cursor'; cursor.textContent = '▋';
+            msgDiv.appendChild(corpo); msgDiv.appendChild(cursor);
+            chatMessages.appendChild(msgDiv);
+
+            const texto = previewTexto(reply);
+            // Velocidade adaptativa: total ~1,2–2s independente do tamanho da resposta.
+            const passo = Math.max(2, Math.ceil(texto.length / 90));
+            let i = 0;
+            const timer = setInterval(() => {
+                i += passo;
+                corpo.textContent = texto.slice(0, i);
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+                if (i >= texto.length) {
+                    clearInterval(timer);
+                    msgDiv.innerHTML = formatMarkdown(reply) + (timestamp ? `<span class="msg-time">${timestamp}</span>` : '');
+                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                }
+            }, 18);
+        }
+
         function appendMessage(sender, content, isHtml = false, timestamp = '') {
             const msgDiv = document.createElement('div');
             msgDiv.classList.add(sender === 'user' ? 'msg-user' : 'msg-bot');
@@ -370,8 +445,8 @@
             const now = new Date();
             const timeStr = now.toLocaleDateString('pt-BR') + ' ' + now.toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'});
             appendMessage('user', message, false, timeStr);
-            
-            loading.style.display = 'block';
+
+            iniciarEstagios();
             chatMessages.scrollTop = chatMessages.scrollHeight;
 
             try {
@@ -381,7 +456,7 @@
                     body: JSON.stringify({ message, session_id: currentSessionId })
                 });
                 const data = await response.json();
-                loading.style.display = 'none';
+                pararEstagios();
 
                 // Garante que a sessão atual esteja sincronizada (ex.: 1ª mensagem cria a sessão)
                 if (data.session_id && data.session_id !== currentSessionId) {
@@ -400,12 +475,19 @@
                         activeScans[data.scan_id] = { target: data.target, stage: estagioInicial, progress: 0 };
                         createScanWidget(data.scan_id, data.target, estagioInicial, 0);
                         startRadar(); 
+                    } else if (data.is_html) {
+                        // Resposta HTML (relatório/tabela/botão): aparece pronta, com fade-in
+                        // suave — NÃO pode ser "digitada" sem quebrar as tags.
+                        appendMessage('bot', data.reply || "⚠️ Sem resposta...", true, data.timestamp);
+                        const ult = chatMessages.lastElementChild;
+                        if (ult) ult.classList.add('msg-fade-in');
                     } else {
-                        appendMessage('bot', data.reply || "⚠️ Sem resposta...", data.is_html, data.timestamp);
+                        // Resposta de texto: efeito de digitação ("escrevendo").
+                        appendBotDigitando(data.reply || "⚠️ Sem resposta...", data.timestamp);
                     }
                 }
             } catch (e) {
-                loading.style.display = 'none';
+                pararEstagios();
                 appendMessage('bot', '❌ Erro de comunicação.');
             }
         }
