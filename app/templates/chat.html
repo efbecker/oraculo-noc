@@ -128,6 +128,20 @@
     </div>
 
     <script>
+        // ===== Logout automático: se a sessão expirar por inatividade, qualquer
+        // chamada ao servidor volta 401. Interceptamos aqui e mandamos para a
+        // tela de login com aviso, em vez de deixar a tela "travada".
+        (function () {
+            const _origFetch = window.fetch;
+            window.fetch = async function (...args) {
+                const resp = await _origFetch.apply(this, args);
+                if (resp.status === 401) {
+                    window.location.href = '/login?expirado=1';
+                }
+                return resp;
+            };
+        })();
+
         // ===== Altura visível real (corrige caixa de texto inacessível no mobile) =====
         // Usa a Visual Viewport API para acompanhar a barra do navegador e o teclado
         // virtual, mantendo a área do app sempre dentro do que está visível na tela.
