@@ -658,6 +658,16 @@ HTML_TEMPLATE = r"""
     </div>
 
     <script>
+        // Logout automático: sessão expirada (401) -> volta ao login com aviso.
+        (function () {
+            const _origFetch = window.fetch;
+            window.fetch = async function (...args) {
+                const resp = await _origFetch.apply(this, args);
+                if (resp.status === 401) { window.location.href = '/login?expirado=1'; }
+                return resp;
+            };
+        })();
+
         // ================== Navegação por abas (sidebar estilo Zabbix) ==================
         function mostrarAba(nome) {
             document.querySelectorAll('.admin-tab').forEach(el => el.classList.remove('active'));
