@@ -36,6 +36,14 @@
 </div>
 
 <script>
+// Aviso de sessão expirada por inatividade (veio de um 401 -> /login?expirado=1).
+if (new URLSearchParams(location.search).get('expirado')) {
+    const box = document.getElementById("errorMsg");
+    box.innerHTML = "<i class='fas fa-clock'></i> Sua sessão expirou por inatividade. Faça login novamente.";
+    box.style.color = "#e3b341";
+    box.style.background = "rgba(227, 179, 65, 0.1)";
+    box.style.display = "block";
+}
 async function doLogin(){
     const u = document.getElementById("username").value;
     const p = document.getElementById("password").value;
