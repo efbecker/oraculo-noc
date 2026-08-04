@@ -110,6 +110,9 @@ def login():
                             pass
 
             if auth_ok:
+                import time
+                session.permanent = True          # ativa a expiração por tempo
+                session['last_active'] = time.time()  # marca início do relógio de inatividade
                 session['user_id'] = user['id']
                 session['username'] = username
                 session['profile'] = user['profile']
