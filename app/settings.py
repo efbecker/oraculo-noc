@@ -71,3 +71,13 @@ DB_PATH = os.environ.get('DB_PATH', os.path.join(BASE_DIR, 'oraculo_zabbix.db'))
 # caso, o usuario PRECISA ter uma URL propria configurada.
 ZABBIX_URL = os.environ.get('ZABBIX_URL', '').strip()
 
+
+# ================= Logout automático (timeout de inatividade) =================
+# Minutos de INATIVIDADE até a sessão expirar (logout automático). A cada ação
+# do usuário o contador reinicia; parado por mais que isso, é preciso logar de
+# novo. Antes não havia expiração — a sessão ficava válida "para sempre".
+# Ajuste por env var SESSION_IDLE_MINUTES (ex.: 15, 30, 60) ou aqui. 0 desativa.
+try:
+    SESSION_IDLE_MINUTES = int(os.environ.get('SESSION_IDLE_MINUTES', '30'))
+except ValueError:
+    SESSION_IDLE_MINUTES = 30
