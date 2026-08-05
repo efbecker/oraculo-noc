@@ -151,6 +151,54 @@
             };
         })();
 
+        // ===== Logout automático por inatividade (no próprio navegador) =====
+        // Complementa a checagem do servidor: a aba se desloga SOZINHA após o
+        // tempo de ociosidade, sem o usuário precisar clicar em nada. O tempo
+        // vem do backend (mesmo valor do servidor). 0 = desativado.
+        (function () {
+            const IDLE_MIN = parseInt('{{ session_idle_minutes|default(0) }}', 10) || 0;
+            if (IDLE_MIN <= 0) return;
+            const IDLE_MS = IDLE_MIN * 60000;
+            const LS_KEY = 'oraculo_last_active';
+            let ultimaAtividade = Date.now();
+            let ativoDesdeUltimoPulso = false;
+
+            function marcarAtividade() {
+                const agora = Date.now();
+                ultimaAtividade = agora;
+                ativoDesdeUltimoPulso = true;
+                // Compartilha entre abas: atividade em QUALQUER aba mantém todas
+                // logadas (evita uma aba ociosa deslogar outra em uso).
+                try { localStorage.setItem(LS_KEY, String(agora)); } catch (e) {}
+            }
+            function ociosaDesde() {
+                let ls = 0;
+                try { ls = parseInt(localStorage.getItem(LS_KEY) || '0', 10) || 0; } catch (e) {}
+                return Math.max(ultimaAtividade, ls);
+            }
+            ['mousemove','mousedown','keydown','scroll','touchstart','click'].forEach(function (ev) {
+                window.addEventListener(ev, marcarAtividade, { passive: true });
+            });
+
+            // Verifica a ociosidade periodicamente e desloga ao estourar o tempo.
+            setInterval(function () {
+                if (Date.now() - ociosaDesde() >= IDLE_MS) {
+                    window.location.href = '/logout?expirado=1';
+                }
+            }, 15000);
+
+            // Heartbeat: enquanto ATIVO, avisa o servidor para a sessão não
+            // expirar por falta de requisições (ex.: lendo um relatório longo).
+            // Parou de interagir -> pulsos cessam -> sessão expira normalmente.
+            const PULSO_MS = Math.max(30000, Math.min(IDLE_MS / 4, 5 * 60000));
+            setInterval(function () {
+                if (ativoDesdeUltimoPulso) {
+                    ativoDesdeUltimoPulso = false;
+                    fetch('/api/heartbeat', { method: 'POST' }).catch(function () {});
+                }
+            }, PULSO_MS);
+        })();
+
         // ===== Altura visível real (corrige caixa de texto inacessível no mobile) =====
         // Usa a Visual Viewport API para acompanhar a barra do navegador e o teclado
         // virtual, mantendo a área do app sempre dentro do que está visível na tela.
