@@ -38,12 +38,26 @@ def _ensure_session(username, session_id):
 @bp.route("/chat")
 @login_required
 def index():
+    from app.settings import SESSION_IDLE_MINUTES
     return render_template(
         'chat.html', 
         username=session.get('username'), 
         profile=session.get('profile'),
-        grupo_cliente=session.get('grupo_cliente'), cache_buster=str(__import__('time').time())
+        grupo_cliente=session.get('grupo_cliente'),
+        session_idle_minutes=SESSION_IDLE_MINUTES,
+        cache_buster=str(__import__('time').time())
     )
+
+
+@bp.route("/api/heartbeat", methods=["POST"])
+@login_required
+def heartbeat():
+    """Pulso de atividade do navegador. Só é chamado pelo front quando há
+    interação recente (mouse/teclado/scroll). Não faz nada além de existir: o
+    before_request já renova o 'last_active' da sessão (esta rota NÃO está em
+    POLL_PATHS). Serve para uma sessão ATIVA não expirar no servidor enquanto o
+    usuário lê a tela sem clicar."""
+    return ('', 204)
 
 @bp.route("/api/chat/message", methods=["POST"])
 @login_required
