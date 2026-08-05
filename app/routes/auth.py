@@ -132,7 +132,11 @@ def login():
 
 @bp.route("/logout")
 def logout():
+    # Preserva o motivo (inatividade) para a tela de login exibir o aviso certo.
+    expirado = request.args.get('expirado')
     session.clear()
+    if expirado:
+        return redirect(url_for('auth.login', expirado=1))
     return redirect(url_for('auth.login'))
 
 @bp.route("/api/users/me/password", methods=["PUT"])
