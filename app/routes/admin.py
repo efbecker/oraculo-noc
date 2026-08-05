@@ -668,6 +668,37 @@ HTML_TEMPLATE = r"""
             };
         })();
 
+        // Logout automático por inatividade (no próprio navegador), sincronizado
+        // com o servidor e compartilhado entre abas via localStorage.
+        (function () {
+            const IDLE_MIN = parseInt('{{ session_idle_minutes|default(0) }}', 10) || 0;
+            if (IDLE_MIN <= 0) return;
+            const IDLE_MS = IDLE_MIN * 60000;
+            const LS_KEY = 'oraculo_last_active';
+            let ultimaAtividade = Date.now();
+            let ativoDesdeUltimoPulso = false;
+            function marcarAtividade() {
+                const agora = Date.now();
+                ultimaAtividade = agora; ativoDesdeUltimoPulso = true;
+                try { localStorage.setItem(LS_KEY, String(agora)); } catch (e) {}
+            }
+            function ociosaDesde() {
+                let ls = 0;
+                try { ls = parseInt(localStorage.getItem(LS_KEY) || '0', 10) || 0; } catch (e) {}
+                return Math.max(ultimaAtividade, ls);
+            }
+            ['mousemove','mousedown','keydown','scroll','touchstart','click'].forEach(function (ev) {
+                window.addEventListener(ev, marcarAtividade, { passive: true });
+            });
+            setInterval(function () {
+                if (Date.now() - ociosaDesde() >= IDLE_MS) { window.location.href = '/logout?expirado=1'; }
+            }, 15000);
+            const PULSO_MS = Math.max(30000, Math.min(IDLE_MS / 4, 5 * 60000));
+            setInterval(function () {
+                if (ativoDesdeUltimoPulso) { ativoDesdeUltimoPulso = false; fetch('/api/heartbeat', { method: 'POST' }).catch(function () {}); }
+            }, PULSO_MS);
+        })();
+
         // ================== Navegação por abas (sidebar estilo Zabbix) ==================
         function mostrarAba(nome) {
             document.querySelectorAll('.admin-tab').forEach(el => el.classList.remove('active'));
@@ -1268,6 +1299,7 @@ def index():
         favicon=branding.favicon_info(),
         veeam_cfg=veeam.current_config(),       # senha já vem MASCARADA
         veeam_map=veeam.list_client_maps(),
+        session_idle_minutes=__import__('app.settings', fromlist=['SESSION_IDLE_MINUTES']).SESSION_IDLE_MINUTES,
     )
 
 
