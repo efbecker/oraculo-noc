@@ -85,7 +85,7 @@ def _eh_bytes(units):
 def _limpar_nome_iface(nome):
     """Reduz o nome do item de tráfego a um identificador de interface legível."""
     limpo = re.sub(r'(?i)\b(número de|numero de|in|out|inbound|outbound|rx|tx|receive[a-z]*|sent|'
-                   r'transmit[a-z]*|recebidos|transmitidos|entrada|sa[ií]da|download|upload|'
+                   r'transmit[a-z]*|recebidos|transmitidos|enviados|entrada|sa[ií]da|download|upload|'
                    r'traffic|tráfego|trafego|rate|bits?|bytes?|bps|octets?|per second|na interface)\b', '', nome)
     limpo = re.sub(r'^[^\w]+|[^\w]+$', '', limpo).strip(' -:[]()')
     return limpo or "Principal"

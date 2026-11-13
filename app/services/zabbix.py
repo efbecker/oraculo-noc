@@ -318,93 +318,168 @@ def _parse_gb(texto):
     return val
 
 
+# --------------------------------------------------------------------------
+# REGRAS DE RIGHT-SIZING (FinOps)
+# --------------------------------------------------------------------------
+# Folga aplicada sobre o PERCENTIL 95 do consumo ao recomendar vCPU/RAM.
+FOLGA_RIGHTSIZING = 1.3
+# Limiar de "CPU/memória sob pressão": o p95 do período passa disso, ou a VM
+# fica acima dele em pelo menos PCT_TEMPO_PRESSAO% das amostras. Um pico
+# isolado (ex.: backup/antivírus de madrugada) NÃO dispara mais o alerta.
+LIMIAR_PRESSAO_CPU = 85.0
+LIMIAR_PRESSAO_MEM = 90.0
+PCT_TEMPO_PRESSAO = 5.0
+# Pisos de dimensionamento (nunca recomendar abaixo disso).
+MIN_VCPU = {'Windows': 2, 'Linux': 1}
+MIN_RAM_GB = {'Windows': 4.0, 'Linux': 1.0}
+# Corte máximo por rodada: no máximo metade do que está alocado. Reduções
+# grandes (ex.: 8 -> 1) são feitas em etapas, reavaliando no relatório seguinte.
+CORTE_MAXIMO = 0.5
+
+
+def _percentil(valores, p):
+    """Percentil p (0-100) por interpolação linear. None se lista vazia."""
+    if not valores:
+        return None
+    v = sorted(valores)
+    if len(v) == 1:
+        return v[0]
+    k = (len(v) - 1) * p / 100.0
+    f = math.floor(k)
+    c = min(f + 1, len(v) - 1)
+    return v[f] + (v[c] - v[f]) * (k - f)
+
+
+def _arredonda_ram_gb(gb):
+    """Arredonda a RAM recomendada para um tamanho 'comprável': 0,5 GB abaixo
+    de 4 GB, 1 GB até 16 GB e 2 GB acima disso — sempre para CIMA."""
+    if gb <= 4:
+        return math.ceil(gb * 2) / 2
+    if gb <= 16:
+        return float(math.ceil(gb))
+    return float(math.ceil(gb / 2) * 2)
+
+
+def _fmt_gb(gb):
+    if gb is None:
+        return "n/d"
+    if gb < 1:
+        return f"{gb*1024:.0f} MB"
+    return f"{gb:.1f}".rstrip('0').rstrip('.') + " GB"
+
+
 def _finops_capacity_insights(n_vcpu, capacidade_ghz, clock_ghz,
                               cpu_avg, cpu_peak, cpu_unit,
-                              mem_avg, mem_peak, mem_unit, mem_total_gb):
-    """Gera recomendações FinOps AGRESSIVAS de right-sizing por VM, cruzando o
-    consumo médio/pico com a CAPACIDADE (nº_vCPUs × clock do cluster do cliente).
+                              mem_avg, mem_peak, mem_unit, mem_total_gb,
+                              cpu_p95=None, cpu_pct_alto=None,
+                              mem_p95=None, mem_pct_alto=None, familia=None):
+    """Recomendações FinOps de right-sizing por VM.
 
-    Funciona tanto quando o consumo vem em GHz (VMware) quanto em % (agente):
-    normaliza para % de utilização + GHz consumidos e recomenda quantas vCPUs /
-    quanto de RAM manter, cobrindo o pico com ~30% de folga. Devolve lista de
-    bullets HTML (mesmo formato/estilo dos insights atuais — não muda o layout)."""
+    Base do dimensionamento = PERCENTIL 95 do consumo (não o pico máximo, que
+    pode ser um evento isolado) × FOLGA_RIGHTSIZING, respeitando os pisos por SO
+    (MIN_VCPU / MIN_RAM_GB) e cortando no máximo CORTE_MAXIMO por rodada.
+    Funciona com consumo em GHz (VMware) ou em % (agente).
+
+    Devolve (insights_html, economia, alertas):
+      economia = {'vcpu': nº de vCPUs devolvíveis, 'ram_gb': GB devolvíveis}
+      alertas  = {'cpu_pressao': bool, 'mem_pressao': bool, 'cpu_pico_isolado': pico%}"""
     ins = []
+    eco = {'vcpu': 0, 'ram_gb': 0.0}
+    alertas = {'cpu_pressao': False, 'mem_pressao': False, 'cpu_pico_isolado': None}
+    fam = familia if familia in MIN_VCPU else 'Linux'
 
     # ---------------- CPU ----------------
     cpu_u = (cpu_unit or '').lower()
-    util_avg = util_peak = None
-    cons_avg_ghz = cons_peak_ghz = None
+    util_avg = util_peak = util_p95 = None
+    cons_avg_ghz = cons_p95_ghz = None
     if cpu_avg is not None:
         if cpu_u == '%':
             util_avg, util_peak = cpu_avg, cpu_peak
+            util_p95 = cpu_p95 if cpu_p95 is not None else cpu_peak
             if capacidade_ghz:
                 cons_avg_ghz = util_avg / 100 * capacidade_ghz
-                cons_peak_ghz = (util_peak if util_peak is not None else util_avg) / 100 * capacidade_ghz
+                cons_p95_ghz = (util_p95 if util_p95 is not None else util_avg) / 100 * capacidade_ghz
         elif 'hz' in cpu_u:  # consumo em GHz (VMware)
-            cons_avg_ghz, cons_peak_ghz = cpu_avg, cpu_peak
+            cons_avg_ghz = cpu_avg
+            cons_p95_ghz = cpu_p95 if cpu_p95 is not None else cpu_peak
             if capacidade_ghz:
                 util_avg = cons_avg_ghz / capacidade_ghz * 100
-                util_peak = (cons_peak_ghz if cons_peak_ghz is not None else cons_avg_ghz) / capacidade_ghz * 100
+                util_p95 = (cons_p95_ghz if cons_p95_ghz is not None else cons_avg_ghz) / capacidade_ghz * 100
+                util_peak = (cpu_peak / capacidade_ghz * 100) if cpu_peak is not None else None
 
-    if util_avg is not None and n_vcpu and capacidade_ghz:
-        base_peak = cons_peak_ghz if cons_peak_ghz is not None else cons_avg_ghz
-        rec = max(1, math.ceil((base_peak or 0) * 1.3 / clock_ghz)) if base_peak else n_vcpu
-        rec = min(rec, n_vcpu)
-        cons_txt = f"{cons_avg_ghz:.1f} de {capacidade_ghz:.0f} GHz" if cons_avg_ghz is not None else f"{util_avg:.0f}%"
+    if util_avg is not None:
+        p95 = util_p95 if util_p95 is not None else util_avg
+        pressao = p95 >= LIMIAR_PRESSAO_CPU or (cpu_pct_alto or 0) >= PCT_TEMPO_PRESSAO
+        p95_txt = f"{p95:.0f}%"
         pico_txt = f"{util_peak:.0f}%" if util_peak is not None else "n/d"
-        if util_avg < 15 and (util_peak is None or util_peak < 60) and rec < n_vcpu:
-            ins.append(
-                f"🔻 <b>Right-Sizing agressivo (CPU ociosa):</b> média de apenas {util_avg:.0f}% da capacidade "
-                f"({cons_txt}), pico {pico_txt}. Recomenda-se reduzir de <b>{n_vcpu}</b> para <b>{rec}</b> vCPUs "
-                f"(~{rec*clock_ghz:.0f} GHz) — devolve recursos ociosos ao cluster.")
-        elif util_avg < 35 and rec < n_vcpu:
-            ins.append(
-                f"🔸 <b>CPU subutilizada:</b> média {util_avg:.0f}% ({cons_txt}), pico {pico_txt}. "
-                f"Há folga para reduzir de {n_vcpu} para {rec} vCPUs.")
-        elif util_peak is not None and util_peak > 90:
-            ins.append(f"🚨 <b>CPU sob pressão:</b> picos de {util_peak:.0f}% da capacidade. Avalie AUMENTAR vCPUs.")
-    elif cpu_avg is not None and cpu_u == '%':
-        # Sem capacidade em GHz (sem contagem de vCPU): regras clássicas por %.
-        if cpu_avg < 20:
-            ins.append("📉 <b>CPU (FinOps):</b> Ociosidade (média < 20%). Avalie downsize.")
-        elif cpu_peak and cpu_peak > 90:
-            ins.append("🚨 <b>CPU (Capacity):</b> Gargalo (picos > 90%). Upgrade recomendado.")
+        if pressao:
+            alertas['cpu_pressao'] = True
+            tempo_txt = f", acima de {LIMIAR_PRESSAO_CPU:.0f}% em {cpu_pct_alto:.0f}% do tempo" if cpu_pct_alto else ""
+            ins.append(f"🚨 <b>CPU sob pressão sustentada:</b> p95 de {p95_txt}{tempo_txt} (média {util_avg:.0f}%). "
+                       f"Avalie AUMENTAR vCPUs" + (f" (hoje {n_vcpu})." if n_vcpu else "."))
+        elif n_vcpu and capacidade_ghz and cons_p95_ghz is not None:
+            piso = MIN_VCPU[fam]
+            rec_ideal = max(1, math.ceil(cons_p95_ghz * FOLGA_RIGHTSIZING / clock_ghz), piso)
+            rec = max(rec_ideal, math.ceil(n_vcpu * (1 - CORTE_MAXIMO)))
+            rec = min(rec, n_vcpu)
+            cons_txt = f"{cons_avg_ghz:.1f} de {capacidade_ghz:.0f} GHz" if cons_avg_ghz is not None else f"{util_avg:.0f}%"
+            if rec < n_vcpu and util_avg < 35 and p95 < 70:
+                eco['vcpu'] = n_vcpu - rec
+                titulo = "Right-Sizing (CPU ociosa)" if util_avg < 15 else "CPU subutilizada"
+                etapa = " Reavalie no próximo relatório para reduzir mais, se ainda houver folga." \
+                    if rec_ideal < rec else ""
+                ins.append(
+                    f"🔻 <b>{titulo}:</b> média {util_avg:.0f}% da capacidade ({cons_txt}), p95 {p95_txt}, pico {pico_txt}. "
+                    f"Recomenda-se reduzir de <b>{n_vcpu}</b> para <b>{rec}</b> vCPUs "
+                    f"(cobre o p95 com {int((FOLGA_RIGHTSIZING-1)*100)}% de folga).{etapa}")
+        elif cpu_u == '%' and util_avg < 20:
+            ins.append("📉 <b>CPU (FinOps):</b> Ociosidade (média < 20%). Sem contagem de vCPUs para dimensionar.")
+        if not pressao and util_peak is not None and util_peak > 90:
+            alertas['cpu_pico_isolado'] = util_peak
+            ins.append(f"ℹ️ <b>Pico isolado de CPU:</b> {pico_txt} em algum momento, mas p95 de só {p95_txt} — "
+                       f"não indica falta de CPU. Vale checar rotinas agendadas (backup, antivírus, updates).")
 
     # ---------------- Memória ----------------
     mem_u = (mem_unit or '').lower()
-    m_util_avg = m_util_peak = None
-    m_avg_gb = m_peak_gb = None
+    m_util_avg = m_util_p95 = m_util_peak = None
+    m_avg_gb = m_p95_gb = None
     if mem_avg is not None:
         if mem_u == '%':
             m_util_avg, m_util_peak = mem_avg, mem_peak
+            m_util_p95 = mem_p95 if mem_p95 is not None else mem_peak
             if mem_total_gb:
                 m_avg_gb = m_util_avg / 100 * mem_total_gb
-                m_peak_gb = (m_util_peak if m_util_peak is not None else m_util_avg) / 100 * mem_total_gb
+                m_p95_gb = (m_util_p95 if m_util_p95 is not None else m_util_avg) / 100 * mem_total_gb
         elif 'gb' in mem_u or 'mb' in mem_u or mem_u == 'b':  # consumo em GB (VMware)
-            m_avg_gb, m_peak_gb = mem_avg, mem_peak
+            m_avg_gb = mem_avg
+            m_p95_gb = mem_p95 if mem_p95 is not None else mem_peak
             if mem_total_gb:
                 m_util_avg = m_avg_gb / mem_total_gb * 100
-                m_util_peak = (m_peak_gb if m_peak_gb is not None else m_avg_gb) / mem_total_gb * 100
+                m_util_p95 = (m_p95_gb if m_p95_gb is not None else m_avg_gb) / mem_total_gb * 100
+                m_util_peak = (mem_peak / mem_total_gb * 100) if mem_peak is not None else None
 
-    if m_util_avg is not None and mem_total_gb:
-        base_gb = m_peak_gb if m_peak_gb is not None else m_avg_gb
-        rec_gb = max(1, math.ceil((base_gb or 0) * 1.3))
-        rec_gb = min(rec_gb, int(round(mem_total_gb)))
-        gb_txt = f"{m_avg_gb:.1f} de {mem_total_gb:.0f} GB" if m_avg_gb is not None else f"{m_util_avg:.0f}%"
-        pico_txt = f"{m_util_peak:.0f}%" if m_util_peak is not None else "n/d"
-        if m_util_avg < 35 and rec_gb < mem_total_gb * 0.9:
-            ins.append(
-                f"🔻 <b>Right-Sizing (RAM ociosa):</b> uso médio de {gb_txt} ({m_util_avg:.0f}%), pico {pico_txt}. "
-                f"Avalie reduzir a RAM para ~{rec_gb} GB.")
-        elif m_util_peak is not None and m_util_peak > 90:
-            ins.append("🚨 <b>Memória saturada (> 90%):</b> risco de swap — avalie AUMENTAR a RAM.")
-    elif mem_avg is not None and mem_u == '%':
-        if mem_avg < 30:
-            ins.append("📉 <b>Memória (FinOps):</b> Ociosidade. Possível downgrade.")
-        elif mem_peak and mem_peak > 90:
-            ins.append("🚨 <b>Memória (Capacity):</b> Saturação > 90%. Risco de swap.")
+    if m_util_avg is not None:
+        p95m = m_util_p95 if m_util_p95 is not None else m_util_avg
+        pressao_m = p95m >= LIMIAR_PRESSAO_MEM or (mem_pct_alto or 0) >= PCT_TEMPO_PRESSAO
+        if pressao_m:
+            alertas['mem_pressao'] = True
+            ins.append(f"🚨 <b>Memória saturada:</b> p95 de {p95m:.0f}% (média {m_util_avg:.0f}%"
+                       + (f" de {_fmt_gb(mem_total_gb)}" if mem_total_gb else "") + "). Risco de swap — avalie AUMENTAR a RAM.")
+        elif mem_total_gb and m_p95_gb is not None:
+            piso = MIN_RAM_GB[fam]
+            rec_gb = _arredonda_ram_gb(m_p95_gb * FOLGA_RIGHTSIZING)
+            rec_gb = max(rec_gb, piso, _arredonda_ram_gb(mem_total_gb * (1 - CORTE_MAXIMO)))
+            # Só recomenda se a redução for relevante (>= 1 GB e >= 20% do total).
+            if m_util_avg < 35 and rec_gb <= mem_total_gb - 1 and rec_gb <= mem_total_gb * 0.8:
+                eco['ram_gb'] = mem_total_gb - rec_gb
+                gb_txt = f"{_fmt_gb(m_avg_gb)} de {_fmt_gb(mem_total_gb)}" if m_avg_gb is not None else f"{m_util_avg:.0f}%"
+                ins.append(
+                    f"🔻 <b>Right-Sizing (RAM ociosa):</b> uso médio de {gb_txt} ({m_util_avg:.0f}%), p95 {p95m:.0f}%. "
+                    f"Avalie reduzir de <b>{_fmt_gb(mem_total_gb)}</b> para <b>{_fmt_gb(rec_gb)}</b>.")
+        elif mem_u == '%' and m_util_avg < 30:
+            ins.append("📉 <b>Memória (FinOps):</b> Ociosidade. Sem RAM total para dimensionar.")
 
-    return ins
+    return ins, eco, alertas
 
 # A MÁGICA COMEÇA AQUI: Recebe a URL do cliente, se não tiver, usa a padrão
 def _chunks(lista, tamanho):
@@ -966,7 +1041,7 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
             elif try_classify_disk(it, nl, hid):
                 pass  # já classificado (e adicionado, se não for pseudo-filesystem) dentro da função
             elif is_valid_net(nl) and re.search(r'\b(bits?|bytes?|net|traffic|tráfego|trafego|rate|bps|octets?)\b', nl):
-                clean_name = re.sub(r'(?i)\b(in|out|inbound|outbound|rx|tx|receive[a-z]*|sent|transmit[a-z]*|recebidos|transmitidos|entrada|sa[ií]da|download|upload|traffic|tráfego|rate|bits?|bytes?|bps|octets?|per second)\b', '', it['name'])
+                clean_name = re.sub(r'(?i)\b(in|out|inbound|outbound|rx|tx|receive[a-z]*|sent|transmit[a-z]*|recebidos|transmitidos|enviados|entrada|sa[ií]da|download|upload|traffic|tráfego|rate|bits?|bytes?|bps|octets?|per second)\b', '', it['name'])
                 iface_name = re.sub(r'^[^\w]+|[^\w]+$', '', clean_name).strip(' -:[]()')
                 if not iface_name: iface_name = "Principal"
                 
@@ -974,7 +1049,7 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
                 
                 if re.search(r'\b(in|inbound|rx|receive[a-z]*|recebidos|entrada|download)\b', nl):
                     host_items[hid]['nets'][iface_name]['in'] = it
-                elif re.search(r'\b(out|outbound|tx|sent|transmit[a-z]*|transmitidos|sa[ií]da|upload)\b', nl):
+                elif re.search(r'\b(out|outbound|tx|sent|transmit[a-z]*|transmitidos|enviados|sa[ií]da|upload)\b', nl):
                     host_items[hid]['nets'][iface_name]['out'] = it
 
         # Converte o _disk_map (agrupado por disco físico: {mount: {kind: item}})
@@ -991,6 +1066,8 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
         linhas_tabela_resumo = []
         max_cpu_global, max_mem_global = 0.0, 0.0
         vm_max_cpu, vm_max_mem = "N/A", "N/A"
+        # Consolidado do ambiente para o resumo global e o placar de economia.
+        economia_vms, vms_cpu_pressao, vms_mem_pressao, vms_pico_isolado, discos_criticos = [], [], [], [], []
         
         for h in hosts:
             hid, name = h['hostid'], h['name']
@@ -1124,6 +1201,7 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
             # (feita após o laço, quando já temos a capacidade em GHz).
             cpu_avg_val = cpu_peak_val = None; cpu_unit = ""
             mem_avg_val = mem_peak_val = None; mem_unit = ""
+            cpu_p95_val = cpu_pct_alto = mem_p95_val = mem_pct_alto = None
             insights_finops = []
 
             # Uptime: usa o valor MAIS RECENTE (lastvalue), não uma média sobre o
@@ -1137,10 +1215,14 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
                 except (TypeError, ValueError):
                     u_str = "N/A"
 
+            _ultima_serie = {'v': []}  # valores da última série extraída (p/ p95)
+
             def extract_and_plot(it, ax, plot_kw):
+                _ultima_serie['v'] = []
                 if it and it['itemid'] in hist_by_item:
                     t, v, u = process_series(hist_by_item[it['itemid']], it.get('units', ''), it['name'])
                     if v:
+                        _ultima_serie['v'] = v
                         if ax:
                             ax.plot(t, v, **plot_kw)
                             if 'linestyle' not in plot_kw: ax.fill_between(t, v, color=plot_kw.get('color', '#00e5ff'), alpha=0.1)
@@ -1169,15 +1251,33 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
                             set_y_formatter(ax, u)
                             c_str = f"{avg:.1f}{u}" if u == '%' else f"{avg:.1f} {u}".strip()
                             cpu_avg_val, cpu_peak_val, cpu_unit = avg, mx, u
+                            _v = _ultima_serie['v']
+                            cpu_p95_val = _percentil(_v, 95)
+                            # % do tempo acima do limiar de pressão (em % da capacidade)
                             if u == '%':
-                                if mx > max_cpu_global: max_cpu_global = mx; vm_max_cpu = name
+                                _pct = _v
+                            elif 'hz' in (u or '').lower() and capacidade_ghz:
+                                _pct = [x / capacidade_ghz * 100 for x in _v]
+                            else:
+                                _pct = []
+                            if _pct:
+                                cpu_pct_alto = sum(1 for x in _pct if x >= LIMIAR_PRESSAO_CPU) / len(_pct) * 100
                         elif lp['type'] == 'mem':
                             u = '%' if not u and avg <= 100.5 else u
                             set_y_formatter(ax, u)
                             m_str = f"{avg:.1f}{u}" if u == '%' else f"{avg:.1f} {u}".strip()
                             mem_avg_val, mem_peak_val, mem_unit = avg, mx, u
+                            _v = _ultima_serie['v']
+                            mem_p95_val = _percentil(_v, 95)
+                            _mt = _parse_gb(mem_tot_val)
                             if u == '%':
-                                if mx > max_mem_global: max_mem_global = mx; vm_max_mem = name
+                                _pct = _v
+                            elif u == 'GB' and _mt:
+                                _pct = [x / _mt * 100 for x in _v]
+                            else:
+                                _pct = []
+                            if _pct:
+                                mem_pct_alto = sum(1 for x in _pct if x >= LIMIAR_PRESSAO_MEM) / len(_pct) * 100
                         elif lp['type'] == 'vpn':
                             vpn_str = f"{avg:.0f} Usr (Pico: {mx:.0f})"
                             insights_finops.append(f"🌐 <b>VPN SSL:</b> Registrado pico de {mx:.0f} conexões simultâneas.")
@@ -1209,10 +1309,19 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
             # Análise FinOps de capacidade (right-sizing agressivo), agora que já
             # temos consumo médio/pico + a capacidade em GHz da VM.
             if not is_fgt:
-                insights_finops.extend(_finops_capacity_insights(
+                _ins, _eco, _al = _finops_capacity_insights(
                     n_vcpu, capacidade_ghz, clock_ghz,
                     cpu_avg_val, cpu_peak_val, cpu_unit,
-                    mem_avg_val, mem_peak_val, mem_unit, _parse_gb(mem_tot_val)))
+                    mem_avg_val, mem_peak_val, mem_unit, _parse_gb(mem_tot_val),
+                    cpu_p95=cpu_p95_val, cpu_pct_alto=cpu_pct_alto,
+                    mem_p95=mem_p95_val, mem_pct_alto=mem_pct_alto,
+                    familia=classificar_familia_so(so_por_host.get(hid)))
+                insights_finops.extend(_ins)
+                if _eco['vcpu'] or _eco['ram_gb']:
+                    economia_vms.append({'name': name, 'hid': hid, 'vcpu': _eco['vcpu'], 'ram_gb': _eco['ram_gb']})
+                if _al['cpu_pressao']: vms_cpu_pressao.append(name)
+                if _al['mem_pressao']: vms_mem_pressao.append(name)
+                if _al['cpu_pico_isolado'] is not None: vms_pico_isolado.append(name)
 
             def _calcular_uso_disco(items_por_tipo):
                 """Calcula o % de USO de um disco a partir dos itens disponíveis
@@ -1273,6 +1382,7 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
 
                     if not sem_dado and used_pct > 85:
                         insights_finops.append(f"🚨 <b>Disco ({n_amigavel}):</b> Volume crítico (> 85%). Expansão recomendada.")
+                        discos_criticos.append((name, n_amigavel, used_pct))
 
             if disk_summaries: d_str_resumo = " | ".join(disk_summaries)
             
@@ -1377,10 +1487,67 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
                 f"{tab_so}{tab_resumo}</tr>"
             )
 
-        analise_texto = "A infraestrutura operou dentro dos limites normais de estabilidade. "
-        if max_cpu_global > 85: analise_texto += f"Identificamos picos críticos de CPU atingindo <strong style='color:#ff4d4d'>{max_cpu_global:.1f}%</strong> na VM <strong>{vm_max_cpu}</strong>. "
-        elif max_cpu_global > 0: analise_texto += f"O maior pico de CPU registrado no período foi de <strong style='color:#00e5ff'>{max_cpu_global:.1f}%</strong> na VM {vm_max_cpu}. "
-        if max_mem_global > 85: analise_texto += f"A memória apresentou saturação crítica de <strong style='color:#ff4d4d'>{max_mem_global:.1f}%</strong> na VM <strong>{vm_max_mem}</strong>."
+        # ---- Resumo global (coerente: só diz "normal" se não houver alerta) ----
+        def _lista_vms(nomes, limite=4):
+            nomes = [f"<strong>{n}</strong>" for n in nomes]
+            if len(nomes) > limite:
+                return ", ".join(nomes[:limite]) + f" e mais {len(nomes) - limite}"
+            return ", ".join(nomes)
+
+        pontos = []
+        if vms_cpu_pressao:
+            pontos.append(f"<li>🚨 <b>CPU sob pressão sustentada</b> (p95 ≥ {LIMIAR_PRESSAO_CPU:.0f}%) em "
+                          f"{len(vms_cpu_pressao)} VM(s): {_lista_vms(vms_cpu_pressao)}.</li>")
+        if vms_mem_pressao:
+            pontos.append(f"<li>🚨 <b>Memória saturada</b> (p95 ≥ {LIMIAR_PRESSAO_MEM:.0f}%) em "
+                          f"{len(vms_mem_pressao)} VM(s): {_lista_vms(vms_mem_pressao)}.</li>")
+        if discos_criticos:
+            _d = sorted(discos_criticos, key=lambda x: -x[2])
+            _txt = ", ".join(f"<strong>{n}</strong> ({m}: {p:.0f}%)" for n, m, p in _d[:4])
+            if len(_d) > 4: _txt += f" e mais {len(_d) - 4}"
+            pontos.append(f"<li>🚨 <b>Discos acima de 85%:</b> {len(_d)} volume(s) — {_txt}.</li>")
+        if vms_pico_isolado:
+            pontos.append(f"<li>ℹ️ <b>Picos isolados de CPU</b> (sem pressão sustentada) em {len(vms_pico_isolado)} VM(s): "
+                          f"{_lista_vms(vms_pico_isolado)}. Provável rotina agendada; não exigem aumento de vCPU.</li>")
+
+        tot_vcpu = sum(e['vcpu'] for e in economia_vms)
+        tot_ram = sum(e['ram_gb'] for e in economia_vms)
+        if pontos:
+            n_acao = sum(1 for p in pontos if '🚨' in p)
+            abertura = (f"{n_acao} ponto(s) pedem ação no período:" if n_acao
+                        else "Nenhum recurso sob pressão sustentada no período. Observações:")
+            analise_texto = f"{abertura}<ul style='margin:8px 0 0 0; padding-left:20px;'>{''.join(pontos)}</ul>"
+        else:
+            analise_texto = ("A infraestrutura operou dentro dos limites normais: nenhuma VM com CPU ou memória "
+                             "sob pressão sustentada e nenhum disco acima de 85%.")
+        if tot_vcpu or tot_ram:
+            analise_texto += (f"<div style='margin-top:8px;'>💰 Oportunidade de otimização: devolver "
+                              f"<b>{tot_vcpu} vCPU(s)</b> e <b>{_fmt_gb(tot_ram)}</b> de RAM ao cluster "
+                              f"em {len(economia_vms)} VM(s) — detalhes no placar abaixo.</div>")
+
+        # ---- Placar de economia (right-sizing) ----
+        placar_html = ""
+        if economia_vms:
+            top = sorted(economia_vms, key=lambda e: (e['vcpu'], e['ram_gb']), reverse=True)[:5]
+            linhas_top = "".join(
+                f"<tr><td><a href='#vm_{e['hid']}' style='color:#00e5ff; text-decoration:none; font-weight:bold;'>{e['name']}</a></td>"
+                f"<td>{('−' + str(e['vcpu'])) if e['vcpu'] else '—'}</td>"
+                f"<td>{('−' + _fmt_gb(e['ram_gb'])) if e['ram_gb'] else '—'}</td></tr>"
+                for e in top)
+            placar_html = f"""
+        <div class='placar'>
+            <div class='placar-cards'>
+                <div class='placar-card'><div class='placar-num'>{tot_vcpu}</div><div class='placar-lbl'>vCPUs devolvíveis</div></div>
+                <div class='placar-card'><div class='placar-num'>{_fmt_gb(tot_ram)}</div><div class='placar-lbl'>RAM devolvível</div></div>
+                <div class='placar-card'><div class='placar-num'>{len(economia_vms)}</div><div class='placar-lbl'>VMs com right-sizing</div></div>
+            </div>
+            <h3 style='color:#00e5ff; margin:22px 0 10px 0; font-size:16px;'>Top {len(top)} VMs com mais recurso a devolver</h3>
+            <div class='table-wrap' style='margin-bottom:0;'><table class='summary-table' style='margin-bottom:0;'>
+                <thead><tr><th>VM</th><th>vCPUs</th><th>RAM</th></tr></thead><tbody>{linhas_top}</tbody>
+            </table></div>
+            <div style='color:#888; font-size:12px; margin-top:10px;'>Recomendações cobrem o p95 do consumo com {int((FOLGA_RIGHTSIZING-1)*100)}% de folga,
+            com mínimo de {MIN_VCPU['Windows']} vCPUs / {_fmt_gb(MIN_RAM_GB['Windows'])} no Windows e corte de no máximo {int(CORTE_MAXIMO*100)}% por rodada.</div>
+        </div>"""
 
         html_filename = f"Dashboard_Executivo_{int(time.time())}.html"
 
@@ -1404,6 +1571,11 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
             .summary-table td:nth-child(2){{max-width:300px;}}
             .status-dot{{display:inline-block; width:14px; height:14px; border-radius:50%; margin-right:10px; vertical-align:middle;}}
             .green{{background:#00e676; box-shadow: 0 0 8px #00e676;}}
+            .placar{{background:#141d16; border:1px solid #1f3a26; border-left:4px solid #00e676; border-radius:6px; padding:20px 25px; margin-bottom:40px;}}
+            .placar-cards{{display:flex; flex-wrap:wrap; gap:16px;}}
+            .placar-card{{flex:1; min-width:160px; background:#121212; border:1px solid #2a2a2a; border-radius:6px; padding:14px 18px;}}
+            .placar-num{{font-size:30px; font-weight:700; color:#00e676;}}
+            .placar-lbl{{font-size:13px; color:#aaa; margin-top:4px;}}
         </style></head><body><div class='container'>
         {branding.get_logo_html()}
         <h1>Dashboard Executivo & FinOps | {grupo}</h1>
@@ -1413,6 +1585,7 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
             <strong style='color:#00e5ff; font-size:16px;'>🤖 Resumo Global da IA:</strong><br>
             {analise_texto}
         </div>
+        {placar_html}
 
         <div class='table-wrap'><table class='summary-table'><thead><tr><th>Status</th><th>Máquina Virtual (Clique para Detalhes)</th><th>Sistema Operacional</th><th>Métricas Médias no Período</th></tr></thead>
         <tbody>{"".join(linhas_tabela_resumo)}</tbody></table></div>
