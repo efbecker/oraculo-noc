@@ -234,6 +234,20 @@ def resumir_so(texto, limite=48):
     return t
 
 
+def _prioridade_so(key_):
+    """Menor = melhor. system.sw.os (agente Linux: 'Debian 9.13') > system.uname
+    (agente; no Windows já é bem descritivo) > guestFullName do VMware (o que
+    foi escolhido ao criar a VM — às vezes desatualizado, ex.: 'Debian 5')."""
+    k = (key_ or '').lower()
+    if k.startswith('system.sw.os'):
+        return 0
+    if k.startswith('system.uname'):
+        return 1
+    if k.startswith('vmware.'):
+        return 3
+    return 2
+
+
 def coletar_so_por_host(host_ids, token, url=None):
     """Busca o Sistema Operacional (texto) de cada host informado.
 
@@ -244,6 +258,7 @@ def coletar_so_por_host(host_ids, token, url=None):
     Nunca levanta exceção: o SO é um enriquecimento; se a coleta falhar, o
     relatório/inventário segue vivo sem ele (mostra 'SO não informado')."""
     so_por_host = {}
+    prioridade = {}
     if not host_ids:
         return so_por_host
     try:
@@ -255,7 +270,7 @@ def coletar_so_por_host(host_ids, token, url=None):
             }, token, url)
             for it in itens:
                 hid = it.get('hostid')
-                if not hid or hid in so_por_host:
+                if not hid:
                     continue
                 nome = it.get('name', '') or ''
                 key_ = it.get('key_', '') or ''
@@ -263,7 +278,12 @@ def coletar_so_por_host(host_ids, token, url=None):
                 if not val:
                     continue
                 if SO_NAME_REGEX.search(nome) or SO_KEY_REGEX.search(key_):
-                    so_por_host[hid] = val
+                    # Host com agente E VMware tem dois itens de SO. Fica o de
+                    # maior prioridade (ver _prioridade_so), não o 1º que vier.
+                    pr = _prioridade_so(key_)
+                    if hid not in prioridade or pr < prioridade[hid]:
+                        so_por_host[hid] = val
+                        prioridade[hid] = pr
     except Exception as e:
         print(f"[zabbix] Aviso: falha ao coletar SO dos hosts: {e}")
     return so_por_host
@@ -335,6 +355,33 @@ MIN_RAM_GB = {'Windows': 4.0, 'Linux': 1.0}
 # Corte máximo por rodada: no máximo metade do que está alocado. Reduções
 # grandes (ex.: 8 -> 1) são feitas em etapas, reavaliando no relatório seguinte.
 CORTE_MAXIMO = 0.5
+
+
+# Previsão de enchimento de disco (regressão linear sobre o % usado).
+MIN_PONTOS_PREVISAO = 48       # ~2 dias de trends horários
+LIMIAR_CRESC_DISCO_DIA = 0.02  # < 0,02 pontos %/dia é ruído, não tendência
+DIAS_ALERTA_DISCO = 60         # avisa discos que enchem em até 60 dias
+# Uptime abaixo disso = "reinício recente".
+REBOOT_RECENTE_S = 24 * 3600
+
+
+def _regressao_linear(xs, ys):
+    """Inclinação (unidade de y por unidade de x) por mínimos quadrados."""
+    n = len(xs)
+    if n < 2:
+        return 0.0
+    mx, my = sum(xs) / n, sum(ys) / n
+    den = sum((x - mx) ** 2 for x in xs)
+    if den == 0:
+        return 0.0
+    return sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / den
+
+
+def _rotulo_mount(mount):
+    """'E:' -> 'E:', '/' -> '/:', '/var' -> '/var:' — rótulo curto do disco
+    para 'C: 49%' nas tabelas (sem gerar 'E::')."""
+    m = _titulo_disco_curto(mount or '?', 18)
+    return m if m.endswith(':') else m + ':'
 
 
 def _percentil(valores, p):
@@ -851,6 +898,90 @@ def consultar_incidentes_zabbix(nome_alvo: str, dias_historico: float, token: st
 
     except Exception as e: return f"Erro na coleta de incidentes: {str(e)}"
 
+def _texto_puro(html_txt):
+    """Remove tags/emoji-markup de um insight para mandar à IA como texto."""
+    t = re.sub(r'<[^>]+>', '', html_txt or '')
+    return html_lib.unescape(re.sub(r'\s+', ' ', t)).strip()
+
+
+def _md_simples_para_html(texto):
+    """Converte a resposta da IA (texto com **negrito** e listas '- ') em HTML
+    seguro: escapa tudo antes, então a IA nunca injeta HTML no relatório."""
+    linhas_html, em_lista = [], False
+    for linha in (texto or '').strip().splitlines():
+        l = linha.strip()
+        if not l:
+            if em_lista:
+                linhas_html.append('</ul>'); em_lista = False
+            continue
+        l = re.sub(r'^#+\s*', '', l)
+        esc = html_lib.escape(l)
+        esc = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', esc)
+        m = re.match(r'^(?:[-*•]|\d+[.)])\s+(.*)', esc)
+        if m:
+            if not em_lista:
+                linhas_html.append("<ul style='margin:8px 0; padding-left:20px;'>"); em_lista = True
+            linhas_html.append(f"<li style='margin-bottom:6px;'>{m.group(1)}</li>")
+        else:
+            if em_lista:
+                linhas_html.append('</ul>'); em_lista = False
+            linhas_html.append(f"<p style='margin:8px 0;'>{esc}</p>")
+    if em_lista:
+        linhas_html.append('</ul>')
+    return ''.join(linhas_html)
+
+
+def _resumo_executivo_ia(username, grupo, dias, n_vms, pontos_html, tot_vcpu, tot_ram,
+                         economia_vms, insights_por_vm):
+    """Pede à IA configurada para o usuário (Admin > IA) um resumo executivo
+    do relatório. Devolve (html, rótulo_da_ia) ou (None, None) se a IA não
+    estiver configurada ou falhar — nunca derruba o relatório."""
+    try:
+        from app.services import ai_providers
+        cfg = ai_providers.config_for_user(username or '')
+        if not (cfg.get('provider') or '').strip():
+            return None, None
+
+        linhas = [f"Cliente: {grupo} | Período: últimos {dias} dias | VMs analisadas: {n_vms}"]
+        linhas.append("Pontos de atenção calculados pelas regras:")
+        linhas += [f"- {_texto_puro(p)}" for p in pontos_html] or ["- nenhum"]
+        linhas.append(f"Oportunidade total de right-sizing: {tot_vcpu} vCPUs e {_fmt_gb(tot_ram)} de RAM "
+                      f"em {len(economia_vms)} VMs.")
+        top = sorted(economia_vms, key=lambda e: (e['vcpu'], e['ram_gb']), reverse=True)[:8]
+        if top:
+            linhas.append("Maiores oportunidades (VM: vCPUs / RAM devolvíveis):")
+            linhas += [f"- {e['name']}: {e['vcpu'] or '—'} vCPU / {_fmt_gb(e['ram_gb']) if e['ram_gb'] else '—'} RAM" for e in top]
+        linhas.append("Achados por VM:")
+        for nome, ins in insights_por_vm:
+            if ins:
+                linhas.append(f"* {nome}: " + " | ".join(ins))
+        dados = "\n".join(linhas)
+        if len(dados) > 24000:
+            dados = dados[:24000] + "\n[...]"
+
+        preamble = (
+            "Você é um analista sênior de FinOps e capacidade de infraestrutura (VMware/Zabbix). "
+            "Escreva em português do Brasil, em tom executivo, para o gestor de TI do cliente. "
+            "Use SOMENTE os números e fatos fornecidos; não invente valores, VMs nem causas. "
+            "Não repita a lista inteira de achados: sintetize e priorize.")
+        prompt = (
+            "Com base nos dados abaixo, escreva:\n"
+            "1) Um parágrafo de 3 a 4 frases com a situação geral do ambiente (riscos e oportunidade de economia).\n"
+            "2) Uma lista de 3 a 5 prioridades, da mais urgente para a menos urgente, cada uma com a ação "
+            "recomendada e as VMs envolvidas. Riscos operacionais (disco cheio, CPU/memória sob pressão) vêm "
+            "antes de economia.\n"
+            "Formato: texto simples; use '- ' para os itens da lista e **negrito** só para nomes de VMs. "
+            "Sem títulos, sem tabelas.\n\n"
+            f"DADOS:\n{dados}")
+        texto = ai_providers.chat(prompt, preamble, [], cfg=cfg, max_tokens=1500)
+        if not (texto or '').strip():
+            return None, None
+        return _md_simples_para_html(texto), ai_providers.label_for_user(username or '')
+    except Exception as e:
+        print(f"[zabbix] Resumo executivo por IA indisponível, usando só as regras: {e}")
+        return None, None
+
+
 def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str, url: str = None, host_filter: str = None, criado_por: str = None, clock_vcpu: float = None) -> str:
     """Gera o relatório completo (CPU/memória/rede/discos) para os hosts do
     grupo do usuário. Se host_filter for informado, restringe aos hosts cujo
@@ -911,7 +1042,17 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
         # o cabeçalho de cada VM no relatório. Coleta tolerante a falha.
         so_por_host = coletar_so_por_host(host_ids, token, url)
 
-        host_items = {h['hostid']: {'cpu': [], 'mem': [], 'nets': {}, 'vpn_users': [], 'disks': [], '_disk_map': {}, 'cpu_total': None, 'mem_total': None, 'uptime': None} for h in hosts}
+        # Cada host pode ter DUAS fontes ao mesmo tempo: o agente Zabbix (dentro
+        # do SO) e o template VMware (API do vCenter). Rede e discos de cada fonte
+        # ficam em mapas SEPARADOS (_vmw) e, no fim, usamos UMA fonte por métrica
+        # — nunca somamos/mesclamos as duas (ver 'Escolha de fonte' abaixo).
+        host_items = {h['hostid']: {'cpu': [], 'mem': [], 'nets': {}, 'nets_vmw': {}, 'vpn_users': [], 'disks': [],
+                                    '_disk_map': {}, '_disk_map_vmw': {}, 'cpu_total': None, 'mem_total': None,
+                                    'mem_total_vmw': None, 'uptime': None, 'uptime_vmw': None, 'power': None}
+                      for h in hosts}
+
+        def _eh_vmware(it):
+            return (it.get('key_') or '').strip().lower().startswith('vmware.')
         
         def is_valid_net(nl):
             return not re.search(r'\b(loopback|lo|veth|docker|speed|velocidade|drop|error|discard|status|estado|ssl)\b', nl)
@@ -965,7 +1106,7 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
             if mount is not None and kind in ('pused', 'pfree', 'used', 'free', 'total'):
                 identificador = _normalizar_mount(mount)
                 if identificador is not None and not DISCOS_BLOQUEADOS_REGEX.search(mount):
-                    grupo = host_items[hid]['_disk_map'].setdefault(identificador, {})
+                    grupo = host_items[hid]['_disk_map_vmw' if _eh_vmware(it) else '_disk_map'].setdefault(identificador, {})
                     grupo[kind] = it
                 return True  # é item de disco pela chave (mesmo que descartado)
 
@@ -996,7 +1137,7 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
             else:
                 return True  # não deu pra saber o tipo do valor, ignora com segurança
 
-            grupo = host_items[hid]['_disk_map'].setdefault(identificador, {})
+            grupo = host_items[hid]['_disk_map_vmw' if _eh_vmware(it) else '_disk_map'].setdefault(identificador, {})
             # A chave técnica (quando existir) já tem prioridade automática, pois
             # roda primeiro no loop de items e "grupo[kind]" só é sobrescrito se
             # o MESMO kind aparecer de novo — então isso nunca derruba um dado
@@ -1023,16 +1164,30 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
                     host_items[hid]['_cpu_total_origem'] = origem_vcpu
                 continue  # item de contagem: não é uso de CPU, disco nem rede
 
-            # Memória total: chave do agente (vm.memory.size[total]) ou do
-            # VMware (vmware.vm.memory.size[...]) tem prioridade sobre o nome.
-            if key_l.startswith('vm.memory.size[total]') or key_l.startswith('vmware.vm.memory.size['):
+            # Estado da VM no vCenter (0 desligada, 1 ligada, 2 suspensa).
+            if key_l.startswith('vmware.vm.powerstate['):
+                host_items[hid]['power'] = it
+                continue
+
+            # Memória total: RAM ALOCADA no VMware (vmware.vm.memory.size[...]) é
+            # guardada à parte — é o que o cliente paga e tem prioridade na
+            # capacidade. Do agente, vm.memory.size[total]; nome como respaldo.
+            if key_l.startswith('vmware.vm.memory.size['):
+                host_items[hid]['mem_total_vmw'] = it
+                continue
+            if key_l.startswith('vm.memory.size[total]'):
                 host_items[hid]['mem_total'] = it
                 host_items[hid]['_mem_total_origem'] = 'key'
+                continue
             elif re.search(r'\b(mem|memória|memory)\b', nl) and 'total' in nl and 'uso' not in nl:
                 if host_items[hid].get('_mem_total_origem') != 'key':
                     host_items[hid]['mem_total'] = it
+            elif 'vmware.vm.guest.osuptime' in key_l:
+                host_items[hid]['uptime_vmw'] = it
+                continue
             elif 'osuptime' in key_l or key_l.startswith('system.uptime'):
                 host_items[hid]['uptime'] = it
+                continue
 
             if 'cpu' in nl and re.search(r'\b(uso|usage|util|percent)\b', nl): host_items[hid]['cpu'].append(it)
             elif re.search(r'\b(mem|memória|memory)\b', nl) and re.search(r'\b(uso|usage|util|percent)\b', nl): host_items[hid]['mem'].append(it)
@@ -1045,16 +1200,51 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
                 iface_name = re.sub(r'^[^\w]+|[^\w]+$', '', clean_name).strip(' -:[]()')
                 if not iface_name: iface_name = "Principal"
                 
-                if iface_name not in host_items[hid]['nets']: host_items[hid]['nets'][iface_name] = {'in': None, 'out': None}
-                
+                nets = host_items[hid]['nets_vmw' if _eh_vmware(it) else 'nets']
+                if iface_name not in nets: nets[iface_name] = {'in': None, 'out': None}
+
                 if re.search(r'\b(in|inbound|rx|receive[a-z]*|recebidos|entrada|download)\b', nl):
-                    host_items[hid]['nets'][iface_name]['in'] = it
+                    nets[iface_name]['in'] = it
                 elif re.search(r'\b(out|outbound|tx|sent|transmit[a-z]*|transmitidos|enviados|sa[ií]da|upload)\b', nl):
-                    host_items[hid]['nets'][iface_name]['out'] = it
+                    nets[iface_name]['out'] = it
 
         # Converte o _disk_map (agrupado por disco físico: {mount: {kind: item}})
         # na lista final 'disks' = [{'mount': mount, 'items': {kind: item}}, ...],
         # ordenada pelo mount para uma ordem estável e previsível (ex.: /, /boot, C:, D:).
+        # ---- Escolha de fonte (agente x VMware) — sem misturar ----
+        # Uso de CPU/memória, discos, rede e uptime: o AGENTE vence (mede de
+        # dentro do SO, igual ao que o cliente vê). VMware só entra quando o host
+        # não tem aquela métrica pelo agente. Capacidade ALOCADA (RAM): VMware
+        # vence, por ser o que está reservado/cobrado no cluster.
+        for hid, h_it in host_items.items():
+            h_it['fonte'] = {}
+            for k in ('cpu', 'mem'):
+                agente = [i for i in h_it[k] if not _eh_vmware(i)]
+                vmw = [i for i in h_it[k] if _eh_vmware(i)]
+                if agente:
+                    h_it[k] = agente
+                    h_it['fonte'][k] = 'agente'
+                elif vmw:
+                    # CPU: consumo em Hz (vmware.vm.cpu.usage), pedido do cliente;
+                    # memória: memória do GUEST (vmware.vm.memory.size.usage.guest),
+                    # mais próxima do SO que o % do host (vmware.vm.memory.usage).
+                    pref = 'vmware.vm.cpu.usage[' if k == 'cpu' else 'vmware.vm.memory.size.usage.guest['
+                    escolhido = [i for i in vmw if (i.get('key_') or '').lower().startswith(pref)]
+                    h_it[k] = escolhido or vmw
+                    h_it['fonte'][k] = 'vmware'
+            if not h_it['_disk_map'] and h_it['_disk_map_vmw']:
+                h_it['_disk_map'] = h_it['_disk_map_vmw']
+                h_it['fonte']['disk'] = 'vmware'
+            elif h_it['_disk_map']:
+                h_it['fonte']['disk'] = 'agente'
+            if not h_it['nets'] and h_it['nets_vmw']:
+                h_it['nets'] = h_it['nets_vmw']
+                h_it['fonte']['net'] = 'vmware'
+            if h_it['mem_total_vmw'] is not None:
+                h_it['mem_total'] = h_it['mem_total_vmw']
+            if h_it['uptime'] is None:
+                h_it['uptime'] = h_it['uptime_vmw']
+
         for hid in host_items:
             mapa = host_items[hid]['_disk_map']
             host_items[hid]['disks'] = [
@@ -1068,6 +1258,8 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
         vm_max_cpu, vm_max_mem = "N/A", "N/A"
         # Consolidado do ambiente para o resumo global e o placar de economia.
         economia_vms, vms_cpu_pressao, vms_mem_pressao, vms_pico_isolado, discos_criticos = [], [], [], [], []
+        discos_enchendo, vms_reboot, vms_desligadas = [], [], []
+        insights_por_vm = []
         
         for h in hosts:
             hid, name = h['hostid'], h['name']
@@ -1122,13 +1314,16 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
                         cpu_tot_val = f"{n_vcpu} vCPUs"
 
                 if h_it['mem_total']:
-                    v = [float(x.get('value_avg', x.get('value', 0))) for x in hist_by_item.get(h_it['mem_total']['itemid'], [])]
+                    # RAM alocada ATUAL (lastvalue), como nas vCPUs; histórico só
+                    # se não houver lastvalue.
+                    v = []
+                    try:
+                        lv = float(h_it['mem_total'].get('lastvalue') or 0)
+                        if lv > 0: v = [lv]
+                    except (TypeError, ValueError):
+                        pass
                     if not v:
-                        try:
-                            lv = float(h_it['mem_total'].get('lastvalue') or 0)
-                            if lv > 0: v = [lv]
-                        except (TypeError, ValueError):
-                            pass
+                        v = [float(x.get('value_avg', x.get('value', 0))) for x in hist_by_item.get(h_it['mem_total']['itemid'], [])]
                     if v:
                         m_mx = max(v)
                         if m_mx > 1073741824: mem_tot_val = f"{m_mx/1073741824:.1f} GB"
@@ -1212,8 +1407,24 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
                 try:
                     segundos_uptime = float(item_uptime['lastvalue'])
                     u_str = _formatar_duracao(segundos_uptime) if segundos_uptime > 0 else "Desligada"
+                    if 0 < segundos_uptime < REBOOT_RECENTE_S:
+                        insights_finops.append(
+                            f"🔄 <b>Reinício recente:</b> a VM está no ar há só {_formatar_duracao(segundos_uptime)}. "
+                            f"Confira se foi planejado (updates/manutenção) ou uma queda.")
+                        vms_reboot.append(name)
                 except (TypeError, ValueError):
                     u_str = "N/A"
+
+            # Estado no vCenter (template VMware): 0 = desligada, 2 = suspensa.
+            vm_desligada = False
+            _pw = h_it.get('power')
+            if _pw is not None and str(_pw.get('lastvalue', '')).strip() in ('0', '2'):
+                vm_desligada = True
+                _estado = 'desligada' if str(_pw.get('lastvalue')).strip() == '0' else 'suspensa'
+                insights_finops.append(
+                    f"⏻ <b>VM {_estado} no vCenter:</b> continua reservando disco (e RAM, se suspensa). "
+                    f"Se não for mais usada, avalie remover ou arquivar.")
+                vms_desligadas.append(name)
 
             _ultima_serie = {'v': []}  # valores da última série extraída (p/ p95)
 
@@ -1249,7 +1460,14 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
                         if lp['type'] == 'cpu':
                             u = '%' if not u and avg <= 100.5 else u
                             set_y_formatter(ax, u)
-                            c_str = f"{avg:.1f}{u}" if u == '%' else f"{avg:.1f} {u}".strip()
+                            if u == '%':
+                                c_str = f"{avg:.1f}%"
+                            elif u == 'GHz' and capacidade_ghz:
+                                # VMware mede em GHz: mostra o % da capacidade
+                                # (comparável às VMs com agente) + o absoluto.
+                                c_str = f"{avg / capacidade_ghz * 100:.1f}% ({avg:.1f} GHz)"
+                            else:
+                                c_str = f"{avg:.1f} {u}".strip()
                             cpu_avg_val, cpu_peak_val, cpu_unit = avg, mx, u
                             _v = _ultima_serie['v']
                             cpu_p95_val = _percentil(_v, 95)
@@ -1265,7 +1483,13 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
                         elif lp['type'] == 'mem':
                             u = '%' if not u and avg <= 100.5 else u
                             set_y_formatter(ax, u)
-                            m_str = f"{avg:.1f}{u}" if u == '%' else f"{avg:.1f} {u}".strip()
+                            _mt_gb = _parse_gb(mem_tot_val)
+                            if u == '%':
+                                m_str = f"{avg:.1f}%"
+                            elif u == 'GB' and _mt_gb:
+                                m_str = f"{avg / _mt_gb * 100:.1f}% ({_fmt_gb(avg)})"
+                            else:
+                                m_str = f"{avg:.1f} {u}".strip()
                             mem_avg_val, mem_peak_val, mem_unit = avg, mx, u
                             _v = _ultima_serie['v']
                             mem_p95_val = _percentil(_v, 95)
@@ -1348,6 +1572,43 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
                     return max(0.0, min(100.0, valores['used'] / (valores['used'] + valores['free']) * 100.0))
                 return None
 
+            def _serie_uso_disco(items_por_tipo):
+                """Série (dias, % usado) do disco para a previsão de enchimento.
+                Usa pused, 100-pfree ou used/total, nessa ordem."""
+                def _rows(kind):
+                    it = items_por_tipo.get(kind)
+                    return hist_by_item.get(it['itemid']) if it else None
+                def _val(r):
+                    return float(r.get('value_avg', r.get('value', 0)))
+                pontos = None
+                if _rows('pused'):
+                    pontos = [(int(r['clock']), _val(r)) for r in _rows('pused')]
+                elif _rows('pfree'):
+                    pontos = [(int(r['clock']), 100.0 - _val(r)) for r in _rows('pfree')]
+                elif _rows('used') and _rows('total'):
+                    tot = {int(r['clock']): _val(r) for r in _rows('total')}
+                    pontos = [(int(r['clock']), _val(r) / tot[int(r['clock'])] * 100.0)
+                              for r in _rows('used') if tot.get(int(r['clock']))]
+                if not pontos or len(pontos) < MIN_PONTOS_PREVISAO:
+                    return None
+                t0 = pontos[0][0]
+                return [(c - t0) / 86400.0 for c, _ in pontos], [v for _, v in pontos]
+
+            def _dias_para_encher(items_por_tipo):
+                """Dias até 100% no ritmo atual (regressão linear), ou None se o
+                disco não está crescendo de forma consistente."""
+                serie = _serie_uso_disco(items_por_tipo)
+                if not serie:
+                    return None
+                xs, ys = serie
+                slope = _regressao_linear(xs, ys)
+                # Ponto de partida: média das últimas 24 amostras (~1 dia), para
+                # não depender de um único valor.
+                atual = sum(ys[-24:]) / len(ys[-24:])
+                if slope <= LIMIAR_CRESC_DISCO_DIA or atual >= 100:
+                    return None
+                return (100.0 - atual) / slope
+
             disk_summaries = []
             if n_disks > 0 and not is_fgt:
                 # Uma subgrade (1 x disk_cols) por linha de discos. Assim os donuts
@@ -1367,7 +1628,8 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
                     if sem_dado:
                         used_pct = 0.0
 
-                    disk_summaries.append(f"{used_pct:.1f}%" if not sem_dado else "sem dado")
+                    _rot = _rotulo_mount(grupo_disco['mount'])
+                    disk_summaries.append(f"{_rot} {used_pct:.1f}%" if not sem_dado else f"{_rot} sem dado")
                     cor_uso = '#00e676' if not sem_dado else '#555555'
                     ax_d.pie([used_pct, max(0, 100 - used_pct)], labels=['Uso', 'Livre'], colors=[cor_uso, '#333333'], startangle=90, radius=1.2, wedgeprops=dict(width=0.4, edgecolor='#1e1e1e'), textprops={'color': '#aaaaaa', 'fontsize': 10})
                     texto_central = f'{used_pct:.1f}%' if not sem_dado else 's/ dado'
@@ -1380,15 +1642,29 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
                     n_amigavel = grupo_disco['mount']
                     ax_d.set_title(_titulo_disco_curto(n_amigavel), fontsize=11, fontweight='bold', pad=16, color='#e0e0e0')
 
+                    dias_cheio = None if sem_dado else _dias_para_encher(grupo_disco['items'])
+                    prazo_txt = ""
+                    if dias_cheio is not None:
+                        data_cheio = datetime.fromtimestamp(hora_atual + dias_cheio * 86400).strftime('%d/%m/%Y')
+                        prazo_txt = (f" No ritmo atual, enche em <b>~{dias_cheio:.0f} dias</b> ({data_cheio})."
+                                     if dias_cheio <= 730 else "")
                     if not sem_dado and used_pct > 85:
-                        insights_finops.append(f"🚨 <b>Disco ({n_amigavel}):</b> Volume crítico (> 85%). Expansão recomendada.")
+                        insights_finops.append(f"🚨 <b>Disco ({n_amigavel}):</b> {used_pct:.0f}% usado — volume crítico (> 85%). "
+                                               f"Expansão recomendada.{prazo_txt}")
                         discos_criticos.append((name, n_amigavel, used_pct))
+                    elif dias_cheio is not None and dias_cheio <= DIAS_ALERTA_DISCO:
+                        insights_finops.append(f"⏳ <b>Disco ({n_amigavel}):</b> {used_pct:.0f}% usado, mas crescendo.{prazo_txt} "
+                                               f"Planeje a expansão.")
+                    if dias_cheio is not None and dias_cheio <= DIAS_ALERTA_DISCO:
+                        discos_enchendo.append((name, n_amigavel, dias_cheio))
 
             if disk_summaries: d_str_resumo = " | ".join(disk_summaries)
             
             if is_fgt: insights_finops.append("🛡️ <b>Fortigate (Firewall):</b> Monitoramento ativo das interfaces e túneis estabelecidos.")
             elif not insights_finops: insights_finops.append("✅ <b>Geral:</b> Dimensionamento adequado. Ativo operando dentro da normalidade (Health 100%).")
             
+            insights_por_vm.append((name, [_texto_puro(i) for i in insights_finops
+                                           if 'Dimensionamento adequado' not in i and 'Fortigate' not in i]))
             insight_html = "<ul style='list-style-type: none; padding: 0; margin: 10px 0;'>" + "".join([f"<li style='margin-bottom: 8px;'>{i}</li>" for i in insights_finops]) + "</ul>"
 
             buf = io.BytesIO()
@@ -1467,7 +1743,7 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
             secoes_html_vms.append(f"""
             <div id='vm_{hid}' style='background:#1e1e1e; padding:25px; border-radius:8px; margin-bottom:40px; border:1px solid #333; box-shadow: 0 4px 15px rgba(0,0,0,0.5);'>
                 <h2 style='color:#ffffff; margin-top:0; border-bottom:1px solid #333; padding-bottom:10px;'>
-                    <span class='status-dot green'></span> {name}{so_badge_html}{cap_badge_html}
+                    <span class='status-dot {"gray" if vm_desligada else "green"}'></span> {name}{so_badge_html}{cap_badge_html}
                 </h2>
                 <div style='display: flex; flex-wrap: wrap; gap: 20px; margin-bottom: 20px;'>
                     {resumo_card_html}
@@ -1482,7 +1758,7 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
 
             tab_so = f"<td class='col-so' title='{_so_title}' style='color:{_cor_so}; font-size:13px;'>{_ic} {_so_label}</td>"
             linhas_tabela_resumo.append(
-                f"<tr><td><span class='status-dot green'></span></td>"
+                f"<tr><td><span class='status-dot {'gray' if vm_desligada else 'green'}' title='{'Desligada' if vm_desligada else 'Ligada'}'></span></td>"
                 f"<td><a href='#vm_{hid}' style='color:#00e5ff; font-weight:bold; text-decoration:none; transition: color 0.3s;' onmouseover=\"this.style.color='#ffffff'\" onmouseout=\"this.style.color='#00e5ff'\">{name}</a></td>"
                 f"{tab_so}{tab_resumo}</tr>"
             )
@@ -1503,9 +1779,20 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
                           f"{len(vms_mem_pressao)} VM(s): {_lista_vms(vms_mem_pressao)}.</li>")
         if discos_criticos:
             _d = sorted(discos_criticos, key=lambda x: -x[2])
-            _txt = ", ".join(f"<strong>{n}</strong> ({m}: {p:.0f}%)" for n, m, p in _d[:4])
+            _txt = ", ".join(f"<strong>{n}</strong> ({_rotulo_mount(m)} {p:.0f}%)" for n, m, p in _d[:4])
             if len(_d) > 4: _txt += f" e mais {len(_d) - 4}"
             pontos.append(f"<li>🚨 <b>Discos acima de 85%:</b> {len(_d)} volume(s) — {_txt}.</li>")
+        _criticos = {(n, m) for n, m, _p in discos_criticos}
+        _enchendo = sorted([d for d in discos_enchendo if (d[0], d[1]) not in _criticos], key=lambda x: x[2])
+        if _enchendo:
+            _txt = ", ".join(f"<strong>{n}</strong> ({_rotulo_mount(m)} ~{dd:.0f} dias)" for n, m, dd in _enchendo[:4])
+            if len(_enchendo) > 4: _txt += f" e mais {len(_enchendo) - 4}"
+            pontos.append(f"<li>⏳ <b>Discos que enchem em até {DIAS_ALERTA_DISCO} dias</b> no ritmo atual: {_txt}.</li>")
+        if vms_desligadas:
+            pontos.append(f"<li>ℹ️ <b>VMs desligadas/suspensas no vCenter:</b> {_lista_vms(vms_desligadas)}. "
+                          f"Ainda ocupam recurso alocado; avalie remover ou arquivar.</li>")
+        if vms_reboot:
+            pontos.append(f"<li>ℹ️ <b>Reinício nas últimas 24h:</b> {_lista_vms(vms_reboot)}.</li>")
         if vms_pico_isolado:
             pontos.append(f"<li>ℹ️ <b>Picos isolados de CPU</b> (sem pressão sustentada) em {len(vms_pico_isolado)} VM(s): "
                           f"{_lista_vms(vms_pico_isolado)}. Provável rotina agendada; não exigem aumento de vCPU.</li>")
@@ -1513,7 +1800,7 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
         tot_vcpu = sum(e['vcpu'] for e in economia_vms)
         tot_ram = sum(e['ram_gb'] for e in economia_vms)
         if pontos:
-            n_acao = sum(1 for p in pontos if '🚨' in p)
+            n_acao = sum(1 for p in pontos if '🚨' in p or '⏳' in p)
             abertura = (f"{n_acao} ponto(s) pedem ação no período:" if n_acao
                         else "Nenhum recurso sob pressão sustentada no período. Observações:")
             analise_texto = f"{abertura}<ul style='margin:8px 0 0 0; padding-left:20px;'>{''.join(pontos)}</ul>"
@@ -1549,6 +1836,31 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
             com mínimo de {MIN_VCPU['Windows']} vCPUs / {_fmt_gb(MIN_RAM_GB['Windows'])} no Windows e corte de no máximo {int(CORTE_MAXIMO*100)}% por rodada.</div>
         </div>"""
 
+        # ---- Resumo executivo escrito pela IA (item 9) ----
+        # As REGRAS acima continuam sendo a fonte dos números; a IA só redige e
+        # prioriza a partir deles. Se a IA não estiver configurada ou falhar, o
+        # relatório sai normalmente só com o resumo por regras.
+        resumo_ia_html, rotulo_ia = _resumo_executivo_ia(
+            criado_por, grupo, dias, len([h for h in hosts]), pontos, tot_vcpu, tot_ram,
+            economia_vms, insights_por_vm)
+        if resumo_ia_html:
+            bloco_resumo = f"""
+        <div class='disclaimer-box'>
+            <strong style='color:#00e5ff; font-size:16px;'>🤖 Resumo Executivo da IA</strong>
+            <span style='color:#777; font-size:12px;'> · {html_lib.escape(rotulo_ia)}</span><br>
+            {resumo_ia_html}
+        </div>
+        <div class='disclaimer-box' style='border-left-color:#ff9e00;'>
+            <strong style='color:#ff9e00; font-size:16px;'>📋 Pontos de atenção (regras automáticas):</strong><br>
+            {analise_texto}
+        </div>"""
+        else:
+            bloco_resumo = f"""
+        <div class='disclaimer-box'>
+            <strong style='color:#00e5ff; font-size:16px;'>🤖 Resumo Global da IA:</strong><br>
+            {analise_texto}
+        </div>"""
+
         html_filename = f"Dashboard_Executivo_{int(time.time())}.html"
 
         full_html = f"""<!DOCTYPE html><html lang='pt-br'><head><meta charset='UTF-8'><title>FinOps | {grupo}</title><style>
@@ -1571,6 +1883,7 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
             .summary-table td:nth-child(2){{max-width:300px;}}
             .status-dot{{display:inline-block; width:14px; height:14px; border-radius:50%; margin-right:10px; vertical-align:middle;}}
             .green{{background:#00e676; box-shadow: 0 0 8px #00e676;}}
+            .gray{{background:#666; box-shadow:none;}}
             .placar{{background:#141d16; border:1px solid #1f3a26; border-left:4px solid #00e676; border-radius:6px; padding:20px 25px; margin-bottom:40px;}}
             .placar-cards{{display:flex; flex-wrap:wrap; gap:16px;}}
             .placar-card{{flex:1; min-width:160px; background:#121212; border:1px solid #2a2a2a; border-radius:6px; padding:14px 18px;}}
@@ -1581,10 +1894,7 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
         <h1>Dashboard Executivo & FinOps | {grupo}</h1>
         <div class='report-info'><strong>Período de Análise:</strong> Últimos {dias} dias<br><strong>Gerado em:</strong> {datetime.now().strftime('%d/%m/%Y %H:%M')}</div>
 
-        <div class='disclaimer-box'>
-            <strong style='color:#00e5ff; font-size:16px;'>🤖 Resumo Global da IA:</strong><br>
-            {analise_texto}
-        </div>
+        {bloco_resumo}
         {placar_html}
 
         <div class='table-wrap'><table class='summary-table'><thead><tr><th>Status</th><th>Máquina Virtual (Clique para Detalhes)</th><th>Sistema Operacional</th><th>Métricas Médias no Período</th></tr></thead>
