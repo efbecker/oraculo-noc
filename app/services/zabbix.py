@@ -5,6 +5,7 @@ import time
 import requests
 import io
 import base64
+import html as html_lib
 from datetime import datetime
 from app.settings import ZABBIX_URL
 from app.services import branding
@@ -183,6 +184,54 @@ def classificar_familia_so(texto):
     )):
         return 'Linux'
     return None
+
+
+def resumir_so(texto, limite=48):
+    """Versão CURTA do SO para exibir no relatório (tabela e selo da VM).
+
+    O item system.uname do Linux devolve a linha inteira do kernel — ex.:
+    'Linux version 4.9.0-19-amd64 (debian-kernel@lists.debian.org) (gcc ...)
+    #1 SMP Debian 4.9.320-2 (2022-06-30)' — que alargava a coluna e cortava
+    o relatório. Aqui vira 'Debian · kernel 4.9.0-19'. No Windows, tira o
+    hostname/build: 'Windows Server 2016 Standard x64'. O texto completo
+    continua disponível no tooltip (title) de quem chama."""
+    if not texto:
+        return texto
+    t = re.sub(r'\s+', ' ', str(texto)).strip()
+    tl = t.lower()
+
+    # Windows: pega a partir de "Microsoft Windows ..." / "Windows Server ..."
+    m = re.search(r'(?:microsoft\s+)?(windows\s+(?:server\s+)?[\w.]+(?:\s+(?:r2|standard|datacenter|enterprise|pro|essentials|professional))*(?:\s+x64|\s+x86|\s+64-bit)?)', t, re.IGNORECASE)
+    if ('windows' in tl or 'microsoft' in tl) and m:
+        curto = m.group(1)
+        # "Windows AZURE-AD 10.0.14393 Microsoft Windows Server 2016" -> usa o último
+        todos = re.findall(r'windows\s+server\s+[\w.]+(?:\s+r2)?(?:\s+(?:standard|datacenter|enterprise|essentials))?(?:\s+x64|\s+x86)?', t, re.IGNORECASE)
+        if todos:
+            curto = todos[-1]
+        return curto[:limite]
+
+    # Linux (linha do uname / /proc/version)
+    mk = re.match(r'linux version\s+(\S+)', t, re.IGNORECASE) or re.match(r'linux\s+\S+\s+(\d+\.\d+\S*)', t, re.IGNORECASE)
+    if mk:
+        kernel = mk.group(1)
+        kcurto = re.match(r'(\d+\.\d+(?:\.\d+)?(?:-\d+)?)', kernel)
+        kcurto = kcurto.group(1) if kcurto else kernel
+        distro = None
+        for padrao, nome in (
+            (r'ubuntu', 'Ubuntu'), (r'debian', 'Debian'), (r'\.el(\d+)', 'RHEL/CentOS {0}'),
+            (r'red hat', 'RHEL/CentOS'), (r'centos', 'CentOS'), (r'rocky', 'Rocky Linux'),
+            (r'alma', 'AlmaLinux'), (r'suse', 'SUSE'), (r'fedora|\.fc(\d+)', 'Fedora'),
+            (r'oracle|\.uek', 'Oracle Linux'), (r'amzn', 'Amazon Linux'),
+        ):
+            mm = re.search(padrao, tl)
+            if mm:
+                distro = nome.format(*[g for g in mm.groups() if g]) if '{0}' in nome and mm.groups() and mm.group(1) else nome.replace(' {0}', '')
+                break
+        return f"{distro or 'Linux'} · kernel {kcurto}"
+
+    if len(t) > limite:
+        return t[:limite - 1].rstrip() + '…'
+    return t
 
 
 def coletar_so_por_host(host_ids, token, url=None):
@@ -1284,9 +1333,12 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
             _fam = classificar_familia_so(so_txt)
             _ic = '🪟' if _fam == 'Windows' else ('🐧' if _fam == 'Linux' else '💻')
             _cor_so = '#00a2ff' if _fam == 'Windows' else ('#00e676' if _fam == 'Linux' else '#888')
-            _so_label = so_txt if so_txt else 'SO não informado'
+            # Texto CURTO na tela, completo no tooltip (o uname do Linux é uma
+            # linha enorme que alargava a tabela e cortava o relatório).
+            _so_label = html_lib.escape(resumir_so(so_txt)) if so_txt else 'SO não informado'
+            _so_title = html_lib.escape(so_txt, quote=True) if so_txt else ''
             so_badge_html = (
-                f"<span style='display:inline-block; margin-left:12px; padding:3px 12px; "
+                f"<span title='{_so_title}' style='display:inline-block; margin-left:12px; padding:3px 12px; "
                 f"background:#121212; border:1px solid {_cor_so}; border-radius:14px; "
                 f"font-size:13px; font-weight:600; color:{_cor_so}; vertical-align:middle; "
                 f"font-family:sans-serif;'>{_ic} {_so_label}</span>"
@@ -1318,7 +1370,7 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
             </div>
             """)
 
-            tab_so = f"<td style='color:{_cor_so}; font-size:13px; white-space:nowrap;'>{_ic} {_so_label}</td>"
+            tab_so = f"<td class='col-so' title='{_so_title}' style='color:{_cor_so}; font-size:13px;'>{_ic} {_so_label}</td>"
             linhas_tabela_resumo.append(
                 f"<tr><td><span class='status-dot green'></span></td>"
                 f"<td><a href='#vm_{hid}' style='color:#00e5ff; font-weight:bold; text-decoration:none; transition: color 0.3s;' onmouseover=\"this.style.color='#ffffff'\" onmouseout=\"this.style.color='#00e5ff'\">{name}</a></td>"
@@ -1342,6 +1394,14 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
             .summary-table th, .summary-table td{{padding:15px; border-bottom:1px solid #333; text-align:left;}}
             .summary-table th{{background:#242424; color:#00e5ff; font-weight: 600; text-transform: uppercase; font-size: 13px; letter-spacing: 1px;}}
             .summary-table tr:hover td{{background:#2a2a2a;}}
+            /* Tabela nunca mais vaza do container: textos longos quebram linha
+               e, se ainda assim não couber (tela estreita), rola na horizontal
+               DENTRO do bloco em vez de cortar a página. */
+            .table-wrap{{width:100%; overflow-x:auto; margin-bottom:40px;}}
+            .table-wrap .summary-table{{margin-bottom:0;}}
+            .summary-table td{{overflow-wrap:anywhere; word-break:break-word; vertical-align:middle;}}
+            .summary-table td.col-so{{max-width:280px;}}
+            .summary-table td:nth-child(2){{max-width:300px;}}
             .status-dot{{display:inline-block; width:14px; height:14px; border-radius:50%; margin-right:10px; vertical-align:middle;}}
             .green{{background:#00e676; box-shadow: 0 0 8px #00e676;}}
         </style></head><body><div class='container'>
@@ -1354,8 +1414,8 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
             {analise_texto}
         </div>
 
-        <table class='summary-table'><thead><tr><th>Status</th><th>Máquina Virtual (Clique para Detalhes)</th><th>Sistema Operacional</th><th>Métricas Médias no Período</th></tr></thead>
-        <tbody>{"".join(linhas_tabela_resumo)}</tbody></table>
+        <div class='table-wrap'><table class='summary-table'><thead><tr><th>Status</th><th>Máquina Virtual (Clique para Detalhes)</th><th>Sistema Operacional</th><th>Métricas Médias no Período</th></tr></thead>
+        <tbody>{"".join(linhas_tabela_resumo)}</tbody></table></div>
 
         <h2 style='color:#00e5ff; margin-top:50px; margin-bottom:20px; text-align:center; font-size: 28px;'>Análise de Capacity (AI) e Gráficos por Servidor</h2>
         {"".join(secoes_html_vms)}
