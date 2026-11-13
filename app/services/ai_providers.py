@@ -51,7 +51,7 @@ PROVIDER_LABELS = {
 MODELO_PADRAO = {
     'openai': 'gpt-4o-mini',
     'gemini': 'gemini-2.0-flash',
-    'anthropic': 'claude-sonnet-4-5',
+    'anthropic': 'claude-sonnet-5-5',
     'openai_compat': '',  # depende do servidor (ex.: 'llama3.1' no Ollama)
 }
 
@@ -347,6 +347,18 @@ def chat(prompt, preamble, history, modelo_usuario=None, cfg=None, max_tokens=No
     return total
 
 
+def _base_url(cfg, provider):
+    """Base URL do provedor. Se o campo do painel apontar para o endpoint
+    OFICIAL de OUTRO provedor (ex.: URL do Google AI Studio sobrando no form
+    depois de trocar para Anthropic), ignoramos e usamos o endpoint padrão do
+    provedor escolhido — senão a chamada iria para o provedor errado."""
+    base = (cfg.get('base_url') or '').strip().rstrip('/')
+    outros = [u for p, u in BASE_URL_PADRAO.items() if u and p != provider]
+    if not base or any(base.startswith(u.split('/v1')[0]) for u in outros):
+        return BASE_URL_PADRAO[provider]
+    return base
+
+
 def _normalizar_alternancia(history):
     """Anthropic e Gemini EXIGEM alternância estrita user/assistant no
     histórico, começando por 'user'. O histórico do Oráculo pode violar isso
@@ -377,7 +389,7 @@ def _chat_openai(prompt, preamble, history, model, cfg, max_tokens=None):
         if not model:
             raise ValueError("Para 'OpenAI-compatível', informe o nome do modelo (ex.: llama3.1).")
     else:
-        base = base or BASE_URL_PADRAO['openai']
+        base = _base_url(cfg, 'openai')
         if not cfg.get('api_key'):
             raise ValueError("Informe a API Key da OpenAI.")
 
@@ -409,7 +421,7 @@ def _chat_gemini(prompt, preamble, history, model, cfg, max_tokens=None):
                 for role, content in _normalizar_alternancia(history)]
     contents.append({"role": "user", "parts": [{"text": prompt}]})
 
-    base = (cfg.get('base_url') or '').rstrip('/') or BASE_URL_PADRAO['gemini']
+    base = _base_url(cfg, 'gemini')
     r = requests.post(
         f"{base}/models/{model}:generateContent",
         headers={"Content-Type": "application/json", "x-goog-api-key": cfg['api_key']},
@@ -434,16 +446,19 @@ def _chat_anthropic(prompt, preamble, history, model, cfg, max_tokens=None):
                 for role, content in _normalizar_alternancia(history)]
     messages.append({"role": "user", "content": prompt})
 
-    base = (cfg.get('base_url') or '').rstrip('/') or BASE_URL_PADRAO['anthropic']
+    base = _base_url(cfg, 'anthropic')
     r = requests.post(f"{base}/messages",
                       headers={"Content-Type": "application/json",
                                "x-api-key": cfg['api_key'],
                                "anthropic-version": "2023-06-01"},
                       timeout=TIMEOUT,
                       json={"model": model, "system": preamble, "messages": messages,
-                            "max_tokens": (max_tokens or MAX_TOKENS), "temperature": TEMPERATURA})
+                            # SEM 'temperature' (nem top_p/top_k): os modelos Claude
+                            # atuais recusam esses parâmetros com HTTP 400
+                            # ("`temperature` is deprecated for this model").
+                            "max_tokens": (max_tokens or MAX_TOKENS)})
     if r.status_code != 200:
-        raise RuntimeError(f"HTTP {r.status_code}: {r.text[:200]}")
+        raise RuntimeError(f"HTTP {r.status_code} (Anthropic, {base}): {r.text[:200]}")
     data = r.json()
     # 'content' é uma lista de blocos; junta todos os de texto (mais robusto que [0]).
     texto = "".join(b.get('text', '') for b in data.get('content', []) if b.get('type') == 'text')

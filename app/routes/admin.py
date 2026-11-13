@@ -927,7 +927,7 @@ HTML_TEMPLATE = r"""
         const IA_SUGESTOES = {
             openai: ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini'],
             gemini: ['gemini-2.0-flash', 'gemini-2.5-flash', 'gemini-2.5-pro'],
-            anthropic: ['claude-sonnet-4-5', 'claude-haiku-4-5'],
+            anthropic: ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-5-5'],
             openai_compat: ['llama3.1', 'deepseek-chat', 'mistral-large-latest']
         };
         const IA_DICAS = {
