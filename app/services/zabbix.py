@@ -98,6 +98,53 @@ HOSTS_AGREGADORES_REGEX = re.compile(
 )
 
 
+# --------------------------------------------------------------------------
+# QUANTIDADE DE vCPUs
+# --------------------------------------------------------------------------
+# Detecção pela CHAVE técnica (independe de idioma/nome do item):
+#   - Linux  (agente):  system.cpu.num            -> "Quantidade de vCPUs"
+#   - Windows (agente): wmi.get[root/cimv2,"Select NumberOfLogicalProcessors
+#                       from Win32_ComputerSystem"] -> "Quantidade de vCPUs"
+#   - VMware (API):     vmware.vm.cpu.num[...]
+# Respaldo pelo NOME do item (ex.: "Quantidade de vCPUs", "Number of CPUs",
+# "Número de núcleos"). Antes o relatório só olhava o nome com um regex que
+# exigia "num/count/core" — "Quantidade de vCPUs" nunca casava e TODAS as VMs
+# com agente Zabbix (templates CLIENTE_*_AGENTE_ATIVO) saíam "Não Monitorado".
+VCPU_KEY_REGEX = re.compile(
+    r'^(?:system\.cpu\.num\b|vmware\.vm\.cpu\.num\b|'
+    r'wmi\.get\[.*NumberOf(?:Logical)?Processors)',
+    re.IGNORECASE
+)
+VCPU_NAME_REGEX = re.compile(
+    r'(?:\b(?:quantidade|qtd|qtde|n[uú]mero|numero|number|num|count|total)\b.*\b(?:v?cpus?|processadores|processors|n[uú]cleos|cores)\b'
+    r'|\bv?cpus?\b.*\b(?:quantidade|qtd|qtde|n[uú]mero|number|num|count|cores?|n[uú]cleos)\b'
+    r'|\bvcpus?\b)',
+    re.IGNORECASE
+)
+# Palavras que indicam que o item é de USO/FREQUÊNCIA, não de contagem.
+_VCPU_EXCLUI_REGEX = re.compile(
+    r'(uso|usage|util|percent|porcentagem|carga|load|ready|wait|steal|idle|'
+    r'interrup|switch|mhz|ghz|hz\b|tempo|time|kaspersky|process[oa]s?\b)',
+    re.IGNORECASE
+)
+
+
+def eh_item_vcpu(it):
+    """Diz se o item Zabbix é a QUANTIDADE de vCPUs da VM.
+    Devolve 'key' quando reconhecido pela chave técnica (prioridade), 'name'
+    quando só pelo nome (respaldo) e None se não for item de vCPU."""
+    key_ = (it.get('key_') or '').strip()
+    if VCPU_KEY_REGEX.search(key_):
+        return 'key'
+    nome = it.get('name') or ''
+    units = (it.get('units') or '').lower()
+    if '%' in units or 'hz' in units:
+        return None
+    if VCPU_NAME_REGEX.search(nome) and not _VCPU_EXCLUI_REGEX.search(nome):
+        return 'name'
+    return None
+
+
 def _eh_host_agregador(nome):
     """True se o host for um agregador de mapa (Alertas / Soma de tráfego), que
     não deve entrar no relatório nem no inventário da IA."""
@@ -838,9 +885,30 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
             hid = it['hostid']
             if hid not in host_items: continue
 
-            if 'cpu' in nl and re.search(r'\b(num|número|count|core)\b', nl): host_items[hid]['cpu_total'] = it
-            elif re.search(r'\b(mem|memória|memory)\b', nl) and 'total' in nl and 'uso' not in nl: host_items[hid]['mem_total'] = it
-            elif 'osuptime' in it.get('key_', '').lower(): host_items[hid]['uptime'] = it
+            key_l = (it.get('key_') or '').strip().lower()
+
+            # Quantidade de vCPUs: CHAVE técnica primeiro (system.cpu.num no
+            # Linux, wmi NumberOfLogicalProcessors no Windows, vmware.vm.cpu.num
+            # no VMware) e NOME como respaldo ("Quantidade de vCPUs" etc.). Um
+            # item achado pela chave nunca é substituído por um achado pelo nome.
+            origem_vcpu = eh_item_vcpu(it)
+            if origem_vcpu:
+                if host_items[hid]['cpu_total'] is None or (
+                        origem_vcpu == 'key' and host_items[hid].get('_cpu_total_origem') != 'key'):
+                    host_items[hid]['cpu_total'] = it
+                    host_items[hid]['_cpu_total_origem'] = origem_vcpu
+                continue  # item de contagem: não é uso de CPU, disco nem rede
+
+            # Memória total: chave do agente (vm.memory.size[total]) ou do
+            # VMware (vmware.vm.memory.size[...]) tem prioridade sobre o nome.
+            if key_l.startswith('vm.memory.size[total]') or key_l.startswith('vmware.vm.memory.size['):
+                host_items[hid]['mem_total'] = it
+                host_items[hid]['_mem_total_origem'] = 'key'
+            elif re.search(r'\b(mem|memória|memory)\b', nl) and 'total' in nl and 'uso' not in nl:
+                if host_items[hid].get('_mem_total_origem') != 'key':
+                    host_items[hid]['mem_total'] = it
+            elif 'osuptime' in key_l or key_l.startswith('system.uptime'):
+                host_items[hid]['uptime'] = it
 
             if 'cpu' in nl and re.search(r'\b(uso|usage|util|percent)\b', nl): host_items[hid]['cpu'].append(it)
             elif re.search(r'\b(mem|memória|memory)\b', nl) and re.search(r'\b(uso|usage|util|percent)\b', nl): host_items[hid]['mem'].append(it)
@@ -902,16 +970,40 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
             capacidade_ghz = None    # nº_vCPUs × clock_ghz
             if not is_fgt:
                 cpu_tot_val, mem_tot_val = "Não Monitorado", "Não Monitorado"
-                if h_it['cpu_total'] and h_it['cpu_total']['itemid'] in hist_by_item:
-                    v = [float(x.get('value_avg', x.get('value', 0))) for x in hist_by_item[h_it['cpu_total']['itemid']]]
-                    if v:
-                        n_vcpu = int(max(v))
+                # vCPUs: usa a alocação ATUAL (lastvalue). O item roda de hora em
+                # hora (delay 1h), então em períodos curtos pode não haver
+                # histórico — e, se a VM foi redimensionada no período, o que
+                # importa para o FinOps é o tamanho de hoje. Sem lastvalue,
+                # cai no ponto mais recente do histórico/trend.
+                if h_it['cpu_total']:
+                    n = None
+                    try:
+                        lv = h_it['cpu_total'].get('lastvalue')
+                        if lv not in (None, ''):
+                            n = float(lv)
+                    except (TypeError, ValueError):
+                        n = None
+                    if not n or n <= 0:
+                        serie = hist_by_item.get(h_it['cpu_total']['itemid']) or []
+                        if serie:
+                            try:
+                                n = float(serie[-1].get('value_avg', serie[-1].get('value', 0)))
+                            except (TypeError, ValueError):
+                                n = None
+                    if n and 0 < n < 4096:
+                        n_vcpu = int(round(n))
                         capacidade_ghz = n_vcpu * clock_ghz
                         cpu_tot_val = f"{n_vcpu} vCPUs"
-                
-                if h_it['mem_total'] and h_it['mem_total']['itemid'] in hist_by_item:
-                    v = [float(x.get('value_avg', x.get('value', 0))) for x in hist_by_item[h_it['mem_total']['itemid']]]
-                    if v: 
+
+                if h_it['mem_total']:
+                    v = [float(x.get('value_avg', x.get('value', 0))) for x in hist_by_item.get(h_it['mem_total']['itemid'], [])]
+                    if not v:
+                        try:
+                            lv = float(h_it['mem_total'].get('lastvalue') or 0)
+                            if lv > 0: v = [lv]
+                        except (TypeError, ValueError):
+                            pass
+                    if v:
                         m_mx = max(v)
                         if m_mx > 1073741824: mem_tot_val = f"{m_mx/1073741824:.1f} GB"
                         elif m_mx > 1048576: mem_tot_val = f"{m_mx/1048576:.1f} MB"
@@ -1485,9 +1577,11 @@ def montar_inventario_para_ia(token, grupo, url=None, clock_vcpu=None):
             # É o que elimina de vez a confusão que dava "100% em todas": o item de
             # CONSUMO (cpu.usage) e o de CAPACIDADE (cpu.capacity.ghz) agora são
             # lidos em campos separados, nunca um no lugar do outro.
-            if key_base == 'vmware.vm.cpu.num':
+            # vCPUs pela chave: vmware.vm.cpu.num, system.cpu.num (agente Linux)
+            # e wmi NumberOfLogicalProcessors (agente Windows).
+            if eh_item_vcpu(it) == 'key':
                 if val is not None and 0 < val < 4096:
-                    dados[hid]['vcpu'] = int(val)
+                    dados[hid]['vcpu'] = int(round(val))
                 continue
             if key_base == 'vmware.vm.cpu.usage':               # consumo (Hz -> GHz)
                 g = _freq_para_ghz(ul, val)
