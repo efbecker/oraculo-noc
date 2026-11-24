@@ -186,6 +186,25 @@ REGRAS DE RESPOSTA:
                 f"*Peça ao administrador para revisar a configuração em **Admin → Inteligência Artificial**.*")
 
 
+# Palavras que definem o TIPO do relatório pedido no prompt.
+_PALAVRAS_FINOPS = ['finops', 'fin ops', 'right-sizing', 'rightsizing', 'right sizing',
+                    'economia', 'economizar', 'custo', 'custos', 'otimiza']
+_PALAVRAS_CONSUMO = ['consumo']
+
+
+def tipo_relatorio_pedido(msg_l):
+    """Decide o tipo de relatório pelo texto do prompt (já em minúsculas):
+    - menciona FinOps/economia/custo/right-sizing -> 'finops'
+    - menciona consumo (e não FinOps)              -> 'consumo'
+    - nenhum dos dois (ex.: "relatório dos meus servidores") -> 'finops',
+      que é o relatório completo de sempre."""
+    if any(p in msg_l for p in _PALAVRAS_FINOPS):
+        return 'finops'
+    if any(p in msg_l for p in _PALAVRAS_CONSUMO):
+        return 'consumo'
+    return 'finops'
+
+
 def process_oraculo_message(message, username, token_zabbix, grupo_cliente, history_rows=None, zabbix_url=None, session_id=None):
     if not zabbix_url: zabbix_url = get_user_zabbix_url(username)
     
@@ -284,7 +303,10 @@ def process_oraculo_message(message, username, token_zabbix, grupo_cliente, hist
         # Status rápido (uma coleta cacheada; responde na hora).
         return {"reply": veeam.status_backup_texto(grupo_cliente), "is_html": 0}
 
-    if any(p in msg_l for p in ['grafico', 'gráfico', 'consumo', 'relatorio', 'relatório']):
+    if any(p in msg_l for p in ['grafico', 'gráfico', 'consumo', 'relatorio', 'relatório',
+                                 'finops', 'fin ops', 'right-sizing', 'rightsizing']):
+        tipo = tipo_relatorio_pedido(msg_l)
+        nome_tipo = "Consumo" if tipo == 'consumo' else "FinOps"
         dias = 1.0
         dias_match = re.search(r'(\d+)\s*dias?', msg_l)
         if dias_match: dias = float(dias_match.group(1))
@@ -313,7 +335,7 @@ def process_oraculo_message(message, username, token_zabbix, grupo_cliente, hist
         elif 'disco' in msg_l: metrica = "DISCO"
         elif 'rede' in msg_l: metrica = "REDE"
         
-        logger.info(f"[Relatório] Usuário '{username}' solicitou relatório FinOps/Consumo para alvo: {target} ({dias} dias).")
+        logger.info(f"[Relatório] Usuário '{username}' solicitou relatório {nome_tipo} para alvo: {target} ({dias} dias).")
 
         # Fecha as credenciais numa função geradora; o relatório em si (formato
         # HTML) permanece EXATAMENTE o mesmo, apenas passa a rodar em background.
@@ -328,19 +350,19 @@ def process_oraculo_message(message, username, token_zabbix, grupo_cliente, hist
 
         dias_txt = int(dias) if float(dias).is_integer() else dias
         if target == "TODOS":
-            label = f"Relatório FinOps ({dias_txt} dia(s))"
+            label = f"Relatório {nome_tipo} ({dias_txt} dia(s))"
             def _gerar():
-                return gerar_relatorio_consumo_todos(dias, token_zabbix, grupo_cliente, zabbix_url, criado_por=username, clock_vcpu=clock_vcpu)
+                return gerar_relatorio_consumo_todos(dias, token_zabbix, grupo_cliente, zabbix_url, criado_por=username, clock_vcpu=clock_vcpu, tipo=tipo)
         else:
-            label = f"Relatório {target} ({dias_txt} dia(s))"
+            label = f"Relatório {nome_tipo} {target} ({dias_txt} dia(s))"
             def _gerar():
-                return gerar_grafico_zabbix(target, metrica, dias, token_zabbix, grupo_cliente, zabbix_url, criado_por=username, clock_vcpu=clock_vcpu)
+                return gerar_grafico_zabbix(target, metrica, dias, token_zabbix, grupo_cliente, zabbix_url, criado_por=username, clock_vcpu=clock_vcpu, tipo=tipo)
 
         job_id = start_report_job(username, label, _gerar, session_id=session_id)
         if not job_id:
             return {"reply": "⚠️ Não foi possível iniciar o relatório. Tente novamente.", "is_html": 0}
 
-        intro = ("📊 **Relatório em processamento!**\nEstou coletando os dados do seu ambiente no Zabbix.\n\n"
+        intro = (f"📊 **Relatório {nome_tipo} em processamento!** (últimos {dias_txt} dia(s))\nEstou coletando os dados do seu ambiente no Zabbix.\n\n"
                  "*Assim que terminar, o relatório aparecerá automaticamente aqui no chat.*")
         return {"reply": intro, "action": "scan", "target": label, "scan_id": job_id, "stage": REPORT_FIRST_STAGE, "is_html": 0}
 
