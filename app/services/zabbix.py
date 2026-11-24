@@ -932,7 +932,7 @@ def _md_simples_para_html(texto):
 
 
 def _resumo_executivo_ia(username, grupo, dias, n_vms, pontos_html, tot_vcpu, tot_ram,
-                         economia_vms, insights_por_vm):
+                         economia_vms, insights_por_vm, tipo='finops'):
     """Pede à IA configurada para o usuário (Admin > IA) um resumo executivo
     do relatório. Devolve (html, rótulo_da_ia) ou (None, None) se a IA não
     estiver configurada ou falhar — nunca derruba o relatório."""
@@ -945,10 +945,12 @@ def _resumo_executivo_ia(username, grupo, dias, n_vms, pontos_html, tot_vcpu, to
         linhas = [f"Cliente: {grupo} | Período: últimos {dias} dias | VMs analisadas: {n_vms}"]
         linhas.append("Pontos de atenção calculados pelas regras:")
         linhas += [f"- {_texto_puro(p)}" for p in pontos_html] or ["- nenhum"]
-        linhas.append(f"Oportunidade total de right-sizing: {tot_vcpu} vCPUs e {_fmt_gb(tot_ram)} de RAM "
-                      f"em {len(economia_vms)} VMs.")
+        consumo = (tipo == 'consumo')
+        if not consumo:
+            linhas.append(f"Oportunidade total de right-sizing: {tot_vcpu} vCPUs e {_fmt_gb(tot_ram)} de RAM "
+                          f"em {len(economia_vms)} VMs.")
         top = sorted(economia_vms, key=lambda e: (e['vcpu'], e['ram_gb']), reverse=True)[:8]
-        if top:
+        if top and not consumo:
             linhas.append("Maiores oportunidades (VM: vCPUs / RAM devolvíveis):")
             linhas += [f"- {e['name']}: {e['vcpu'] or '—'} vCPU / {_fmt_gb(e['ram_gb']) if e['ram_gb'] else '—'} RAM" for e in top]
         linhas.append("Achados por VM:")
@@ -958,6 +960,26 @@ def _resumo_executivo_ia(username, grupo, dias, n_vms, pontos_html, tot_vcpu, to
         dados = "\n".join(linhas)
         if len(dados) > 24000:
             dados = dados[:24000] + "\n[...]"
+
+        if consumo:
+            preamble = (
+                "Você é um analista sênior de infraestrutura (VMware/Zabbix) escrevendo um relatório de "
+                "CONSUMO de recursos. Escreva em português do Brasil, em tom executivo, para o gestor de TI do cliente. "
+                "Use SOMENTE os números e fatos fornecidos; não invente valores, VMs nem causas. "
+                "NÃO fale de custos, economia, FinOps nem redução de vCPU/RAM: o foco é como os recursos foram usados.")
+            prompt = (
+                "Com base nos dados abaixo, escreva:\n"
+                "1) Um parágrafo de 3 a 4 frases com o panorama de consumo do ambiente no período "
+                "(CPU, memória, disco e rede; onde está a maior carga).\n"
+                "2) Uma lista de 3 a 5 pontos de atenção de consumo, do mais urgente para o menos urgente, "
+                "citando as VMs envolvidas (ex.: disco perto de encher, CPU/memória sob pressão, picos).\n"
+                "Formato: texto simples; use '- ' para os itens da lista e **negrito** só para nomes de VMs. "
+                "Sem títulos, sem tabelas.\n\n"
+                f"DADOS:\n{dados}")
+            texto = ai_providers.chat(prompt, preamble, [], cfg=cfg, max_tokens=1500)
+            if not (texto or '').strip():
+                return None, None
+            return _md_simples_para_html(texto), ai_providers.label_for_user(username or '')
 
         preamble = (
             "Você é um analista sênior de FinOps e capacidade de infraestrutura (VMware/Zabbix). "
@@ -982,12 +1004,18 @@ def _resumo_executivo_ia(username, grupo, dias, n_vms, pontos_html, tot_vcpu, to
         return None, None
 
 
-def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str, url: str = None, host_filter: str = None, criado_por: str = None, clock_vcpu: float = None) -> str:
+def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str, url: str = None, host_filter: str = None, criado_por: str = None, clock_vcpu: float = None, tipo: str = 'finops') -> str:
     """Gera o relatório completo (CPU/memória/rede/discos) para os hosts do
-    grupo do usuário. Se host_filter for informado, restringe aos hosts cujo
+    grupo do usuário.
+
+    tipo='finops' (padrão): dashboard FinOps, com right-sizing por VM e placar
+    de vCPUs/RAM devolvíveis.
+    tipo='consumo': só o consumo de recursos no período (médias, gráficos,
+    pressão e discos), SEM recomendações de redução nem placar de economia. Se host_filter for informado, restringe aos hosts cujo
     nome bate com esse filtro (usado pelo pedido de relatório de UMA VM
     específica) — mantendo o MESMO layout/motor do relatório de todos, só
     reduzindo a lista de hosts processados."""
+    consumo = (tipo == 'consumo')
     dias = int(float(dias_historico)) if float(dias_historico) >= 1 else 1
     hora_atual = int(time.time())
     hora_passada = int(hora_atual - (dias * 24 * 3600))
@@ -1540,6 +1568,11 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
                     cpu_p95=cpu_p95_val, cpu_pct_alto=cpu_pct_alto,
                     mem_p95=mem_p95_val, mem_pct_alto=mem_pct_alto,
                     familia=classificar_familia_so(so_por_host.get(hid)))
+                if consumo:
+                    # Relatório de consumo: mantém alertas de pressão/picos, mas
+                    # descarta recomendações de redução (right-sizing / ociosidade).
+                    _ins = [i for i in _ins if not i.startswith(('🔻', '📉'))]
+                    _eco = {'vcpu': 0, 'ram_gb': 0.0}
                 insights_finops.extend(_ins)
                 if _eco['vcpu'] or _eco['ram_gb']:
                     economia_vms.append({'name': name, 'hid': hid, 'vcpu': _eco['vcpu'], 'ram_gb': _eco['ram_gb']})
@@ -1661,10 +1694,15 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
             if disk_summaries: d_str_resumo = " | ".join(disk_summaries)
             
             if is_fgt: insights_finops.append("🛡️ <b>Fortigate (Firewall):</b> Monitoramento ativo das interfaces e túneis estabelecidos.")
-            elif not insights_finops: insights_finops.append("✅ <b>Geral:</b> Dimensionamento adequado. Ativo operando dentro da normalidade (Health 100%).")
+            elif not insights_finops:
+                if consumo:
+                    insights_finops.append("✅ <b>Geral:</b> Consumo dentro da normalidade no período (Health 100%).")
+                else:
+                    insights_finops.append("✅ <b>Geral:</b> Dimensionamento adequado. Ativo operando dentro da normalidade (Health 100%).")
             
             insights_por_vm.append((name, [_texto_puro(i) for i in insights_finops
-                                           if 'Dimensionamento adequado' not in i and 'Fortigate' not in i]))
+                                           if 'Dimensionamento adequado' not in i and 'Consumo dentro da normalidade' not in i
+                                           and 'Fortigate' not in i]))
             insight_html = "<ul style='list-style-type: none; padding: 0; margin: 10px 0;'>" + "".join([f"<li style='margin-bottom: 8px;'>{i}</li>" for i in insights_finops]) + "</ul>"
 
             buf = io.BytesIO()
@@ -1748,7 +1786,7 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
                 <div style='display: flex; flex-wrap: wrap; gap: 20px; margin-bottom: 20px;'>
                     {resumo_card_html}
                     <div style='flex: 2; min-width: 400px; background:#16212b; padding:15px; border-radius:6px; border-left: 4px solid #00e5ff; font-size:14px;'>
-                        <h4 style='margin: 0 0 10px 0; color: #00e5ff;'>🤖 Análise de Capacity & FinOps (Oráculo AI)</h4>
+                        <h4 style='margin: 0 0 10px 0; color: #00e5ff;'>{"🤖 Análise de Consumo (Oráculo AI)" if consumo else "🤖 Análise de Capacity & FinOps (Oráculo AI)"}</h4>
                         {insight_html}
                     </div>
                 </div>
@@ -1814,7 +1852,7 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
 
         # ---- Placar de economia (right-sizing) ----
         placar_html = ""
-        if economia_vms:
+        if economia_vms and not consumo:
             top = sorted(economia_vms, key=lambda e: (e['vcpu'], e['ram_gb']), reverse=True)[:5]
             linhas_top = "".join(
                 f"<tr><td><a href='#vm_{e['hid']}' style='color:#00e5ff; text-decoration:none; font-weight:bold;'>{e['name']}</a></td>"
@@ -1842,7 +1880,7 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
         # relatório sai normalmente só com o resumo por regras.
         resumo_ia_html, rotulo_ia = _resumo_executivo_ia(
             criado_por, grupo, dias, len([h for h in hosts]), pontos, tot_vcpu, tot_ram,
-            economia_vms, insights_por_vm)
+            economia_vms, insights_por_vm, tipo='consumo' if consumo else 'finops')
         if resumo_ia_html:
             bloco_resumo = f"""
         <div class='disclaimer-box'>
@@ -1861,9 +1899,16 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
             {analise_texto}
         </div>"""
 
-        html_filename = f"Dashboard_Executivo_{int(time.time())}.html"
+        if consumo:
+            html_filename = f"Relatorio_Consumo_{int(time.time())}.html"
+            titulo_aba, titulo_h1 = f"Consumo | {grupo}", f"Relatório de Consumo | {grupo}"
+            titulo_secao = "Análise de Consumo (AI) e Gráficos por Servidor"
+        else:
+            html_filename = f"Dashboard_Executivo_{int(time.time())}.html"
+            titulo_aba, titulo_h1 = f"FinOps | {grupo}", f"Dashboard Executivo & FinOps | {grupo}"
+            titulo_secao = "Análise de Capacity (AI) e Gráficos por Servidor"
 
-        full_html = f"""<!DOCTYPE html><html lang='pt-br'><head><meta charset='UTF-8'><title>FinOps | {grupo}</title><style>
+        full_html = f"""<!DOCTYPE html><html lang='pt-br'><head><meta charset='UTF-8'><title>{titulo_aba}</title><style>
             body{{font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background:#121212; color:#e0e0e0; margin:0; padding:20px; scroll-behavior: smooth;}}
             .container{{max-width:1200px; margin:auto; background:#161616; padding:40px; border-radius:12px; box-shadow:0 10px 40px rgba(0,0,0,0.8); border: 1px solid #2a2a2a;}}
             h1{{text-align:center; color:#00e5ff; margin-bottom:10px; font-size:38px; font-weight:700; letter-spacing: 1px;}}
@@ -1891,7 +1936,7 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
             .placar-lbl{{font-size:13px; color:#aaa; margin-top:4px;}}
         </style></head><body><div class='container'>
         {branding.get_logo_html()}
-        <h1>Dashboard Executivo & FinOps | {grupo}</h1>
+        <h1>{titulo_h1}</h1>
         <div class='report-info'><strong>Período de Análise:</strong> Últimos {dias} dias<br><strong>Gerado em:</strong> {datetime.now().strftime('%d/%m/%Y %H:%M')}</div>
 
         {bloco_resumo}
@@ -1900,7 +1945,7 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
         <div class='table-wrap'><table class='summary-table'><thead><tr><th>Status</th><th>Máquina Virtual (Clique para Detalhes)</th><th>Sistema Operacional</th><th>Métricas Médias no Período</th></tr></thead>
         <tbody>{"".join(linhas_tabela_resumo)}</tbody></table></div>
 
-        <h2 style='color:#00e5ff; margin-top:50px; margin-bottom:20px; text-align:center; font-size: 28px;'>Análise de Capacity (AI) e Gráficos por Servidor</h2>
+        <h2 style='color:#00e5ff; margin-top:50px; margin-bottom:20px; text-align:center; font-size: 28px;'>{titulo_secao}</h2>
         {"".join(secoes_html_vms)}
         </div></body></html>"""
 
@@ -1911,7 +1956,7 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
             full_html,
             grupo=grupo,
             criado_por=criado_por,
-            titulo=f"FinOps | {grupo} | {dias} dia(s)"
+            titulo=f"{titulo_aba} | {dias} dia(s)"
         )
 
         html_progress = (
@@ -1927,7 +1972,8 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
             "<style>@keyframes progresso-oraculo { 0% {width: 0%;} 100% {width: 100%;} }</style>"
         )
 
-        msg_chat = "<p style='color:#00e5ff; font-weight:bold; font-size:15px; margin-bottom:10px;'>✅ Relatório Concluído</p>"
+        _nome_rel = "Relatório de Consumo" if consumo else "Relatório FinOps"
+        msg_chat = f"<p style='color:#00e5ff; font-weight:bold; font-size:15px; margin-bottom:10px;'>✅ {_nome_rel} Concluído</p>"
 
         if report_id:
             botao_html = (
@@ -1950,7 +1996,7 @@ def gerar_relatorio_consumo_todos(dias_historico: float, token: str, grupo: str,
         return html_progress + msg_chat + botao_html
     except Exception as e: return f"Erro ao gerar relatório global: {str(e)}"
 
-def gerar_grafico_zabbix(nome_host: str, metrica: str, quantidade_dias: float, token: str, grupo: str = None, url: str = None, criado_por: str = None, clock_vcpu: float = None) -> str:
+def gerar_grafico_zabbix(nome_host: str, metrica: str, quantidade_dias: float, token: str, grupo: str = None, url: str = None, criado_por: str = None, clock_vcpu: float = None, tipo: str = 'finops') -> str:
     """Relatório de UMA VM específica, pedida por nome (ex.: "gere relatório
     da VM CLIENTE_ASV_VM_ASV-BD01-IPEL"). Reaproveita o MESMO motor/layout do
     relatório de "TODOS" (gerar_relatorio_consumo_todos), só restringindo a
@@ -1961,7 +2007,7 @@ def gerar_grafico_zabbix(nome_host: str, metrica: str, quantidade_dias: float, t
     do host NUNCA sai do grupo/conta do usuário que pediu o relatório, mesmo
     que exista uma VM com nome parecido em outra conta.
     """
-    return gerar_relatorio_consumo_todos(quantidade_dias, token, grupo, url, host_filter=nome_host, criado_por=criado_por, clock_vcpu=clock_vcpu)
+    return gerar_relatorio_consumo_todos(quantidade_dias, token, grupo, url, host_filter=nome_host, criado_por=criado_por, clock_vcpu=clock_vcpu, tipo=tipo)
 
 
 
