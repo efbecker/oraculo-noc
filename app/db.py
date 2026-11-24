@@ -355,7 +355,6 @@ def init_schema():
                 grupo_cliente TEXT,
                 token_zabbix TEXT,
                 zabbix_url TEXT,
-                ai_model TEXT,
                 clock_vcpu REAL DEFAULT 2.0
             )
         """)
