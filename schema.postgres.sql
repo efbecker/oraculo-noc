@@ -25,8 +25,7 @@ CREATE TABLE IF NOT EXISTS users (
     profile        TEXT,          -- ADMINISTRADOR | CLIENTE
     grupo_cliente  TEXT,          -- grupo do Zabbix ao qual o usuário é restrito
     token_zabbix   TEXT,          -- token da API do Zabbix (por usuário)
-    zabbix_url     TEXT,          -- URL específica do Zabbix (opcional; senão usa a global)
-    ai_model       TEXT           -- legado: fallback de modelo p/ OCI (ver Admin → IA)
+    zabbix_url     TEXT           -- URL específica do Zabbix (opcional; senão usa a global)
 );
 
 CREATE TABLE IF NOT EXISTS chat_history (
