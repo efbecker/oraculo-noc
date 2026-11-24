@@ -106,5 +106,4 @@ echo "   2. Acompanhe os logs:         journalctl -u ${SERVICE_NAME} -f"
 echo "   3. Acesse http://IP:5000 e entre com o admin padrao (admin / admin123)."
 echo "   4. No painel Admin: troque a senha do admin, configure Banco de Dados,"
 echo "      Inteligencia Artificial e cadastre os usuarios/tokens do Zabbix."
-echo "   5. (Opcional) Fora da OCI, configure a API Key da OCI em ~/.oci/config."
 echo

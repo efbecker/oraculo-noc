@@ -12,8 +12,8 @@ app/static/*.png
 app/static/*.mp3
 
 # ===== Configuração com segredos (fica só no servidor) =====
-# config.py tem SECRET_KEY, URL do Zabbix e OCID da OCI. O modelo versionado
-# é o config.py.example; o install.sh gera o config.py real a partir dele.
+# config.py legado (SECRET_KEY, URL do Zabbix). Hoje a app usa app/settings.py
+# + painel Admin; mantido aqui só para nunca versionar um config.py antigo.
 config.py
 !config.py.example
 
